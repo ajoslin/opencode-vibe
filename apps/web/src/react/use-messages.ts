@@ -15,7 +15,7 @@
  * ```
  */
 
-import { useEffect, useRef } from "react"
+import { useEffect } from "react"
 import { useSSE } from "./use-sse"
 import { useOpencodeStore, type Message } from "./store"
 
@@ -37,20 +37,15 @@ export function useMessages(sessionId: string): Message[] {
 
 	// Subscribe to SSE events for real-time updates
 	useEffect(() => {
-		// Helper to safely extract properties from event payload
-		const getProperties = (event: { payload?: { properties?: unknown } }) => {
-			return event.payload?.properties as { info?: Message; sessionID?: string } | undefined
-		}
-
-		// message.created - new message in any session
+		// message.created - DEPRECATED: OpenCode API only emits message.updated
+		// Keeping for backwards compatibility but message.updated handles both new and updated
 		const unsubscribeCreated = subscribe("message.created", (event) => {
 			// event.payload.properties.info contains Message data
-			// event.payload.properties.sessionID tells us which session
-			const props = getProperties(event)
+			// sessionID is INSIDE info, not a separate property
+			const props = event.payload?.properties as { info?: Message } | undefined
 			const messageData = props?.info
-			const messageSessionId = props?.sessionID
 
-			if (messageSessionId === sessionId && messageData) {
+			if (messageData?.sessionID === sessionId) {
 				// Check if message already exists (dedupe)
 				const store = useOpencodeStore.getState()
 				const existingMessages = store.messages[sessionId] || []
@@ -62,13 +57,14 @@ export function useMessages(sessionId: string): Message[] {
 			}
 		})
 
-		// message.updated - message content or metadata changed
+		// message.updated - handles BOTH new and updated messages
 		const unsubscribeUpdated = subscribe("message.updated", (event) => {
-			const props = getProperties(event)
+			// Payload: { properties: { info: Message } }
+			// sessionID is INSIDE info, not a separate property
+			const props = event.payload?.properties as { info?: Message } | undefined
 			const messageData = props?.info
-			const messageSessionId = props?.sessionID
 
-			if (messageSessionId === sessionId && messageData) {
+			if (messageData?.sessionID === sessionId) {
 				// Update entire message with new data
 				useOpencodeStore.getState().updateMessage(sessionId, messageData.id, (draft) => {
 					Object.assign(draft, messageData)
@@ -78,14 +74,38 @@ export function useMessages(sessionId: string): Message[] {
 
 		// message.part.updated - tool calls, results, streaming chunks
 		const unsubscribePartUpdated = subscribe("message.part.updated", (event) => {
-			const props = getProperties(event)
-			const messageData = props?.info
-			const messageSessionId = props?.sessionID
+			// Payload: { properties: { part: Part } }
+			// Part has sessionID, messageID, and content
+			type Part = {
+				id: string
+				sessionID: string
+				messageID: string
+				[key: string]: unknown
+			}
+			const props = event.payload?.properties as { part?: Part } | undefined
+			const part = props?.part
 
-			if (messageSessionId === sessionId && messageData) {
-				// Update entire message with new data (includes parts)
-				useOpencodeStore.getState().updateMessage(sessionId, messageData.id, (draft) => {
-					Object.assign(draft, messageData)
+			if (part?.sessionID === sessionId) {
+				// Find the parent message and update its parts array
+				const store = useOpencodeStore.getState()
+				store.updateMessage(sessionId, part.messageID, (draft) => {
+					// Type-cast parts array to work with unknown type
+					type PartArray = Part[]
+					const parts = (draft.parts as PartArray | undefined) || []
+
+					// Find existing part or add new one
+					const partIndex = parts.findIndex((p) => p.id === part.id)
+					if (partIndex >= 0) {
+						// Update existing part
+						parts[partIndex] = part
+					} else {
+						// Add new part and sort by ID
+						parts.push(part)
+						parts.sort((a, b) => a.id.localeCompare(b.id))
+					}
+
+					// Assign back to draft
+					draft.parts = parts as unknown
 				})
 			}
 		})

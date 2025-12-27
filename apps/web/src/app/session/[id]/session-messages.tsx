@@ -59,7 +59,7 @@ interface SessionMessagesProps {
  * Handles race conditions where parts may arrive before their parent message.
  */
 export function SessionMessages({ sessionId, directory, initialMessages }: SessionMessagesProps) {
-	const [rawMessages, setRawMessages] = useState<OpenCodeMessage[]>([])
+	const [_rawMessages, setRawMessages] = useState<OpenCodeMessage[]>([])
 	const [messages, setMessages] = useState<UIMessage[]>(initialMessages)
 	const [input, setInput] = useState("")
 	const [status, setStatus] = useState<ChatStatus>("ready")

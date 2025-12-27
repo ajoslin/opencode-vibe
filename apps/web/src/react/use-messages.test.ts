@@ -137,12 +137,12 @@ describe("useMessages", () => {
 	it("adds message when message.created event fires", () => {
 		const { result } = renderHook(() => useMessages(sessionId))
 
-		// Simulate SSE event
+		// Simulate SSE event - sessionID is INSIDE info
 		act(() => {
 			emitEvent("message.created", {
 				payload: {
 					type: "message.created",
-					properties: { info: testMessage1, sessionID: sessionId },
+					properties: { info: testMessage1 },
 				},
 			})
 		})
@@ -155,14 +155,13 @@ describe("useMessages", () => {
 	it("ignores message.created events for different sessions", () => {
 		const { result } = renderHook(() => useMessages(sessionId))
 
-		// Event for different session
+		// Event for different session - sessionID is INSIDE info
 		act(() => {
 			emitEvent("message.created", {
 				payload: {
 					type: "message.created",
 					properties: {
 						info: { ...testMessage1, sessionID: "different-session" },
-						sessionID: "different-session",
 					},
 				},
 			})
@@ -179,12 +178,12 @@ describe("useMessages", () => {
 
 		const { result } = renderHook(() => useMessages(sessionId))
 
-		// Simulate duplicate event
+		// Simulate duplicate event - sessionID is INSIDE info
 		act(() => {
 			emitEvent("message.created", {
 				payload: {
 					type: "message.created",
-					properties: { info: testMessage1, sessionID: sessionId },
+					properties: { info: testMessage1 },
 				},
 			})
 		})
@@ -200,7 +199,7 @@ describe("useMessages", () => {
 
 		const { result } = renderHook(() => useMessages(sessionId))
 
-		// Simulate update event
+		// Simulate update event - sessionID is INSIDE info
 		const updatedMessage = {
 			...testMessage1,
 			content: "Updated content",
@@ -210,7 +209,7 @@ describe("useMessages", () => {
 			emitEvent("message.updated", {
 				payload: {
 					type: "message.updated",
-					properties: { info: updatedMessage, sessionID: sessionId },
+					properties: { info: updatedMessage },
 				},
 			})
 		})
@@ -226,27 +225,26 @@ describe("useMessages", () => {
 
 		const { result } = renderHook(() => useMessages(sessionId))
 
-		// Simulate part update event
-		const messageWithParts = {
-			...testMessage1,
-			parts: [{ type: "tool-call", content: "calling tool" }],
+		// Simulate part update event - payload has `part` not `info`
+		const part = {
+			id: "part-001",
+			sessionID: sessionId,
+			messageID: testMessage1.id,
+			type: "tool-call",
+			content: "calling tool",
 		}
 
 		act(() => {
 			emitEvent("message.part.updated", {
 				payload: {
 					type: "message.part.updated",
-					properties: {
-						info: messageWithParts,
-						sessionID: sessionId,
-						messageID: testMessage1.id,
-					},
+					properties: { part },
 				},
 			})
 		})
 
-		// Message should have parts
-		expect(result.current[0]).toEqual(messageWithParts)
+		// Message should have parts array with the new part
+		expect(result.current[0].parts).toEqual([part])
 	})
 
 	it("unsubscribes all events on unmount", () => {
@@ -299,5 +297,103 @@ describe("useMessages", () => {
 		})
 
 		expect(result.current[0].role).toBe("system")
+	})
+
+	it("handles incremental part updates (streaming)", () => {
+		act(() => {
+			useOpencodeStore.getState().addMessage(testMessage1)
+		})
+
+		const { result } = renderHook(() => useMessages(sessionId))
+
+		// First chunk of text
+		const part1 = {
+			id: "part-001",
+			sessionID: sessionId,
+			messageID: testMessage1.id,
+			type: "text",
+			text: "Hello",
+		}
+
+		act(() => {
+			emitEvent("message.part.updated", {
+				payload: {
+					type: "message.part.updated",
+					properties: { part: part1 },
+				},
+			})
+		})
+
+		expect(result.current[0].parts).toHaveLength(1)
+		expect((result.current[0].parts as any)[0].text).toBe("Hello")
+
+		// Update same part with more text (streaming)
+		const part1Updated = {
+			...part1,
+			text: "Hello world",
+		}
+
+		act(() => {
+			emitEvent("message.part.updated", {
+				payload: {
+					type: "message.part.updated",
+					properties: { part: part1Updated },
+				},
+			})
+		})
+
+		expect(result.current[0].parts).toHaveLength(1)
+		expect((result.current[0].parts as any)[0].text).toBe("Hello world")
+	})
+
+	it("sorts parts by ID when multiple parts arrive", () => {
+		act(() => {
+			useOpencodeStore.getState().addMessage(testMessage1)
+		})
+
+		const { result } = renderHook(() => useMessages(sessionId))
+
+		// Parts arrive out of order
+		const part3 = {
+			id: "part-003",
+			sessionID: sessionId,
+			messageID: testMessage1.id,
+			type: "text",
+			text: "Third",
+		}
+
+		const part1 = {
+			id: "part-001",
+			sessionID: sessionId,
+			messageID: testMessage1.id,
+			type: "text",
+			text: "First",
+		}
+
+		const part2 = {
+			id: "part-002",
+			sessionID: sessionId,
+			messageID: testMessage1.id,
+			type: "text",
+			text: "Second",
+		}
+
+		act(() => {
+			emitEvent("message.part.updated", {
+				payload: { type: "message.part.updated", properties: { part: part3 } },
+			})
+			emitEvent("message.part.updated", {
+				payload: { type: "message.part.updated", properties: { part: part1 } },
+			})
+			emitEvent("message.part.updated", {
+				payload: { type: "message.part.updated", properties: { part: part2 } },
+			})
+		})
+
+		// Should be sorted by ID
+		expect(result.current[0].parts).toHaveLength(3)
+		expect((result.current[0].parts as any)[0].id).toBe("part-001")
+		expect((result.current[0].parts as any)[1].id).toBe("part-002")
+		expect((result.current[0].parts as any)[2].id).toBe("part-003")
 	})
 })

@@ -1,25 +1,13 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useEffect } from "react"
 import Link from "next/link"
 import type { UIMessage } from "ai"
-import { useSSE } from "@/react"
-import { transformMessages, type OpenCodeMessage } from "@/lib/transform-messages"
+import { OpenCodeProvider, useSession, useMessages } from "@/react"
+import { useOpencodeStore } from "@/react/store"
 import { NewSessionButton } from "./new-session-button"
-import { ContextUsage } from "./context-usage"
 import { SessionMessages } from "./session-messages"
 import type { Session } from "@opencode-ai/sdk/client"
-
-/**
- * SSE event payload shapes (from OpenCode API)
- */
-type MessageInfo = {
-	id: string
-	sessionID: string
-	role: string
-	createdAt?: string
-	time?: { created: number; completed?: number }
-}
 
 interface SessionLayoutProps {
 	session: Session
@@ -29,57 +17,37 @@ interface SessionLayoutProps {
 }
 
 /**
- * Client component wrapper for session page
+ * Session content component - uses hooks to access reactive data
  *
- * Manages shared state between header (ContextUsage) and SessionMessages.
- * Subscribes to message.updated events to maintain rawMessages for context monitoring.
+ * Must be inside OpenCodeProvider to access useSession and useMessages.
  */
-export function SessionLayout({
-	session,
+function SessionContent({
 	sessionId,
 	directory,
 	initialMessages,
-}: SessionLayoutProps) {
-	const [rawMessages, setRawMessages] = useState<OpenCodeMessage[]>([])
-	const { subscribe } = useSSE()
+	initialSession,
+}: {
+	sessionId: string
+	directory?: string
+	initialMessages: UIMessage[]
+	initialSession: Session
+}) {
+	const store = useOpencodeStore()
 
-	// Normalize directory for comparison (remove trailing slash)
-	const normalizedDirectory = directory?.replace(/\/$/, "")
-
-	// Subscribe to message.updated events to track rawMessages
+	// Hydrate store with initial session data on mount
 	useEffect(() => {
-		const unsubscribeMessageUpdated = subscribe("message.updated", (event) => {
-			// Filter by directory if provided
-			if (normalizedDirectory && event.directory?.replace(/\/$/, "") !== normalizedDirectory) {
-				return
-			}
-
-			const props = event.payload?.properties as { info?: MessageInfo } | undefined
-			const info = props?.info
-			if (!info || info.sessionID !== sessionId) return
-
-			// Build OpenCodeMessage from the info
-			const opencodeMsg: OpenCodeMessage = {
-				info: info as unknown as OpenCodeMessage["info"],
-				parts: [],
-			}
-
-			// Add or update message
-			setRawMessages((prev) => {
-				const exists = prev.some((msg) => msg.info.id === info.id)
-				if (exists) {
-					return prev.map((msg) =>
-						msg.info.id === info.id ? { ...msg, info: opencodeMsg.info } : msg,
-					)
-				}
-				return [...prev, opencodeMsg].sort((a, b) => a.info.id.localeCompare(b.info.id))
-			})
-		})
-
-		return () => {
-			unsubscribeMessageUpdated()
+		// Add session to store if not already present
+		const existing = store.getSession(sessionId)
+		if (!existing) {
+			store.addSession(initialSession)
 		}
-	}, [sessionId, normalizedDirectory, subscribe])
+	}, [sessionId, initialSession, store])
+
+	// Get reactive session data from store (updated via SSE)
+	const session = useSession(sessionId) ?? initialSession
+
+	// Get reactive messages from store
+	const storeMessages = useMessages(sessionId)
 
 	return (
 		<>
@@ -94,10 +62,12 @@ export function SessionLayout({
 							← Back
 						</Link>
 						<div className="flex items-center gap-4">
-							<ContextUsage messages={rawMessages} />
+							{/* Show message count from useMessages hook */}
+							<div className="text-xs text-muted-foreground">{storeMessages.length} messages</div>
 							<NewSessionButton directory={directory} />
 						</div>
 					</div>
+					{/* Session title from useSession hook */}
 					<h1 className="text-lg font-semibold text-foreground mt-1 line-clamp-1">
 						{session.title || "Untitled Session"}
 					</h1>
@@ -116,5 +86,32 @@ export function SessionLayout({
 				/>
 			</main>
 		</>
+	)
+}
+
+/**
+ * Client component wrapper for session page
+ *
+ * Wraps content with OpenCodeProvider to enable reactive hooks.
+ * Server-provided initial data is used as fallback until SSE updates arrive.
+ */
+export function SessionLayout({
+	session,
+	sessionId,
+	directory,
+	initialMessages,
+}: SessionLayoutProps) {
+	// Default URL to localhost:4056 (OpenCode server)
+	const url = process.env.NEXT_PUBLIC_OPENCODE_URL || "http://localhost:4056"
+
+	return (
+		<OpenCodeProvider url={url} directory={directory || session.directory}>
+			<SessionContent
+				sessionId={sessionId}
+				directory={directory}
+				initialMessages={initialMessages}
+				initialSession={session}
+			/>
+		</OpenCodeProvider>
 	)
 }
