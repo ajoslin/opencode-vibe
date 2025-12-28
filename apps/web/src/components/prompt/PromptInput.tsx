@@ -334,7 +334,8 @@ export function PromptInput({
 
 			<div
 				className={cn(
-					"group/input relative flex w-full flex-col rounded-lg border border-input bg-muted dark:bg-zinc-900 shadow-sm",
+					"group/input relative flex w-full flex-col rounded-lg border border-input shadow-sm",
+					"bg-[var(--popover)]", // Match code block background
 					"transition-[border-color,box-shadow] duration-200",
 					"focus-within:ring-1 focus-within:ring-ring",
 					disabled && "opacity-50 cursor-not-allowed",
