@@ -190,17 +190,41 @@ export function transformPart(part: Part): SupportedUIPart | null {
 }
 
 /**
+ * Extended UIMessage with OpenCode-specific metadata
+ */
+export type ExtendedUIMessage = UIMessage & {
+	/** Original OpenCode message info for status detection */
+	_opencode?: {
+		parentID?: string
+		time?: { created: number; completed?: number }
+		finish?: string
+	}
+}
+
+/**
  * Transform OpenCode message envelope to ai-elements UIMessage
  */
-export function transformMessage(opencodeMsg: OpenCodeMessage): UIMessage {
+export function transformMessage(opencodeMsg: OpenCodeMessage): ExtendedUIMessage {
 	const transformedParts = opencodeMsg.parts
 		.map(transformPart)
 		.filter((part): part is SupportedUIPart => part !== null)
 
+	// Cast to access fields not in SDK types but present at runtime
+	const info = opencodeMsg.info as Message & {
+		parentID?: string
+		finish?: string
+	}
+
 	return {
-		id: opencodeMsg.info.id,
-		role: opencodeMsg.info.role,
+		id: info.id,
+		role: info.role,
 		parts: transformedParts as UIMessage["parts"],
+		// Preserve metadata for pending/processing detection
+		_opencode: {
+			parentID: info.parentID,
+			time: info.time,
+			finish: info.finish,
+		},
 	}
 }
 

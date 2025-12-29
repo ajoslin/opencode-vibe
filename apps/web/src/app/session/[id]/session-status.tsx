@@ -17,6 +17,7 @@ import { useState, useEffect } from "react"
 import { useSessionStatus } from "@/react/use-session-status"
 import { useSSE } from "@/react/use-sse"
 import { Badge } from "@/components/ui/badge"
+import { Loader } from "@/components/ai-elements/loader"
 import type { GlobalEvent } from "@opencode-ai/sdk/client"
 
 export interface SessionStatusProps {

@@ -36,7 +36,9 @@ export type Message = {
 	id: string
 	sessionID: string
 	role: string
+	parentID?: string // Assistant messages have parentID pointing to user message
 	time?: { created: number; completed?: number }
+	finish?: string // "stop", "tool-calls", etc. - only set when complete
 	[key: string]: unknown // Allow additional fields
 }
 

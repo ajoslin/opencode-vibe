@@ -167,15 +167,52 @@ opencode-next/
 └── turbo.json                  # Turborepo config
 ```
 
+### Code Tour
+
+**Start here to understand the codebase:**
+
+#### 1. Server Discovery (`apps/web/src/app/api/opencode-servers/route.ts`)
+
+The magic that finds all running OpenCode processes. Uses `lsof` to find TCP listeners, hits `/project` to verify they're OpenCode, returns the list. Called on page load.
+
+#### 2. SSE Connection (`apps/web/src/react/use-multi-server-sse.ts`)
+
+Opens SSE streams to ALL discovered servers simultaneously. Events include a `directory` field that routes updates to the correct project in the store. This is how TUI ↔ Web sync works.
+
+#### 3. Zustand Store (`apps/web/src/react/store.ts`)
+
+Central state management. Directory-scoped (each project has isolated state). Handles SSE events via `handleEvent()` which dispatches to specific handlers for sessions, messages, parts, etc. Uses Immer for immutable updates.
+
+#### 4. Message Transform (`apps/web/src/lib/transform-messages.ts`)
+
+Converts OpenCode SDK types → ai-elements UIMessage format. The SDK returns `{info, parts}` envelopes; this flattens them for rendering. Also handles tool state mapping.
+
+#### 5. Session Page (`apps/web/src/app/session/[id]/page.tsx`)
+
+Server Component that fetches initial data. Uses `limit=20` for fast initial load (pagination). Passes data to client components for hydration.
+
+#### 6. Session Messages (`apps/web/src/app/session/[id]/session-messages.tsx`)
+
+Client Component that renders the message list. Hydrates Zustand store on first render, then subscribes to real-time updates. Uses memoization to prevent re-renders during streaming.
+
+#### 7. Prompt Input (`apps/web/src/components/prompt/PromptInput.tsx`)
+
+The input box. Handles slash commands (`/`), file references (`@`), and message sending. Autocomplete powered by fuzzy search over commands and files.
+
+#### 8. AI Elements (`apps/web/src/components/ai-elements/`)
+
+Chat UI components: Message, Tool, Reasoning, Conversation, etc. Adapted from Vercel's ai-elements patterns. Each component handles its own streaming states.
+
 ### Available Scripts
 
 ```bash
 # Development
-bun dev                 # Start Next.js dev server (port 8423)
+bun dev                 # Start Next.js dev server (port 8423 = VIBE)
 bun build               # Production build
 bun start               # Start production server
 
 # Code Quality
+bun run typecheck       # TypeScript check (via turbo, checks all packages)
 bun lint                # Run oxlint
 bun format              # Format with Biome
 bun format:check        # Check formatting

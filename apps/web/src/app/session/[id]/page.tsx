@@ -38,6 +38,14 @@ async function getSession(id: string, directory?: string): Promise<Session | nul
 }
 
 /**
+ * Default number of messages to fetch initially
+ * Prevents Chrome from freezing on sessions with 500+ messages
+ * SSE will stream in new messages as they arrive
+ * User can scroll up to load older messages
+ */
+const INITIAL_MESSAGE_LIMIT = 20
+
+/**
  * Fetch messages for a session (NOT cached - messages are real-time and can be very large)
  * SSE handles real-time updates after initial load
  *
@@ -46,7 +54,10 @@ async function getSession(id: string, directory?: string): Promise<Session | nul
 async function getMessages(id: string, directory?: string) {
 	try {
 		const client = createClient(directory)
-		const result = await client.session.messages({ path: { id } })
+		const result = await client.session.messages({
+			path: { id },
+			query: { limit: INITIAL_MESSAGE_LIMIT },
+		})
 
 		if (!result.data) {
 			return {

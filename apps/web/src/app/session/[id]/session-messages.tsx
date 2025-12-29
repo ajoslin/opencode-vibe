@@ -5,7 +5,7 @@ import type { UIMessage, ChatStatus } from "ai"
 import { useMessagesWithParts } from "@/react/use-messages-with-parts"
 import { useSessionStatus } from "@/react/use-session-status"
 import { useOpencodeStore } from "@/react/store"
-import { transformMessages } from "@/lib/transform-messages"
+import { transformMessages, type ExtendedUIMessage } from "@/lib/transform-messages"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from "@/components/ai-elements/tool"
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning"
@@ -16,6 +16,7 @@ import {
 	ConversationEmptyState,
 } from "@/components/ai-elements/conversation"
 import { Loader } from "@/components/ai-elements/loader"
+import { Clock } from "lucide-react"
 
 interface SessionMessagesProps {
 	sessionId: string
@@ -48,6 +49,67 @@ const sanitizeToolType = (type: string): string => {
 }
 
 /**
+ * Message state for pending/processing detection
+ */
+type MessageState = "pending" | "processing" | "complete" | "error"
+
+/**
+ * Get the state of a message based on its metadata and related messages
+ */
+function getMessageState(
+	message: ExtendedUIMessage,
+	allMessages: ExtendedUIMessage[],
+	sessionRunning: boolean,
+): MessageState {
+	const opencode = message._opencode
+
+	if (message.role === "user") {
+		// Find assistant response to this user message
+		const response = allMessages.find(
+			(m) => m.role === "assistant" && m._opencode?.parentID === message.id,
+		)
+
+		if (!response) {
+			// No response yet - show as pending (queued)
+			return "pending"
+		}
+
+		// Response exists - no longer queued, either processing or complete
+		if (response._opencode?.finish) {
+			return "complete"
+		}
+
+		// Response exists but not finished = processing (but not queued)
+		return "processing"
+	}
+
+	if (message.role === "assistant") {
+		if (!opencode?.finish) {
+			return "processing"
+		}
+		return "complete"
+	}
+
+	return "complete"
+}
+
+/**
+ * Status indicator for pending messages (truly queued, no response yet)
+ */
+function MessageStatusIndicator({ state }: { state: MessageState }) {
+	// Only show "Queued" when truly pending (no assistant response exists yet)
+	// Once assistant starts responding, hide the indicator immediately
+	if (state !== "pending") return null
+
+	return (
+		<div className="flex items-center gap-1.5 text-xs text-amber-500 mt-1">
+			<Clock className="size-3" />
+			<span>Queued</span>
+		</div>
+	)
+}
+
+/**
  * Issue 1 fix: Memoized message renderer with content-aware comparison.
  * Only re-renders when message content actually changes, not when other messages update.
  */
@@ -56,10 +118,12 @@ const MessageRenderer = memo(
 		message,
 		messageIndex,
 		status,
+		messageState,
 	}: {
-		message: UIMessage
+		message: ExtendedUIMessage
 		messageIndex: number
 		status: ChatStatus
+		messageState: MessageState
 	}) => {
 		return (
 			<div className="flex flex-col gap-3">
@@ -72,6 +136,10 @@ const MessageRenderer = memo(
 							<Message key={partKey} from={message.role}>
 								<MessageContent>
 									<MessageResponse>{part.text}</MessageResponse>
+									{/* Show status indicator on user messages */}
+									{message.role === "user" && i === message.parts!.length - 1 && (
+										<MessageStatusIndicator state={messageState} />
+									)}
 								</MessageContent>
 							</Message>
 						)
@@ -141,6 +209,8 @@ const MessageRenderer = memo(
 	(prev, next) => {
 		// Compare message ID
 		if (prev.message.id !== next.message.id) return false
+		// Compare message state (pending/processing/complete)
+		if (prev.messageState !== next.messageState) return false
 		// Compare parts length (indicates content change)
 		if (prev.message.parts?.length !== next.message.parts?.length) return false
 		// Compare streaming status (affects reasoning component)
@@ -196,15 +266,16 @@ export function SessionMessages({
 	// Get session status from store
 	const { running } = useSessionStatus(sessionId)
 
-	// Transform store messages to UIMessage format
+	// Transform store messages to UIMessage format (with extended metadata)
 	const transformedStoreMessages = useMemo(() => {
-		if (storeMessages.length === 0) return []
-		return transformMessages(storeMessages)
+		if (storeMessages.length === 0) return [] as ExtendedUIMessage[]
+		return transformMessages(storeMessages) as ExtendedUIMessage[]
 	}, [storeMessages])
 
 	// Use store messages if available, otherwise fall back to initial messages
 	// This ensures we show initial SSR data until real-time updates arrive
-	const messages = storeMessages.length > 0 ? transformedStoreMessages : initialMessages
+	const messages: ExtendedUIMessage[] =
+		storeMessages.length > 0 ? transformedStoreMessages : (initialMessages as ExtendedUIMessage[])
 
 	// Determine status: external (from parent) > running (from store) > ready
 	const status: ChatStatus = externalStatus ?? (running ? "streaming" : "ready")
@@ -223,6 +294,7 @@ export function SessionMessages({
 								message={message}
 								messageIndex={messageIndex}
 								status={status}
+								messageState={getMessageState(message, messages, running)}
 							/>
 						))}
 						{status === "submitted" && <Loader />}
