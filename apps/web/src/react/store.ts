@@ -425,12 +425,15 @@ export const useOpencodeStore = create<OpencodeState & OpencodeActions>()(
 				}
 				const dir = state.directories[directory]
 
-				// Hydrate messages (sorted)
-				dir.messages[sessionID] = messages.sort((a, b) => a.id.localeCompare(b.id))
+				// Filter out invalid messages (must have id) and sort
+				const validMessages = messages.filter((m) => m && typeof m.id === "string")
+				dir.messages[sessionID] = validMessages.sort((a, b) => a.id.localeCompare(b.id))
 
 				// Hydrate parts for each message (sorted)
 				for (const [messageID, messageParts] of Object.entries(parts)) {
-					dir.parts[messageID] = messageParts.sort((a, b) => a.id.localeCompare(b.id))
+					if (!messageID || !Array.isArray(messageParts)) continue
+					const validParts = messageParts.filter((p) => p && typeof p.id === "string")
+					dir.parts[messageID] = validParts.sort((a, b) => a.id.localeCompare(b.id))
 				}
 			})
 		},

@@ -54,7 +54,9 @@ async function getMessages(id: string, directory?: string) {
 		}
 
 		// SDK returns messages with {id, role, createdAt, parts[]}
-		const sdkMessages = result.data as unknown as SDKMessage[]
+		const sdkMessages = (result.data as unknown as SDKMessage[]).filter(
+			(msg) => msg && typeof msg.id === "string",
+		)
 
 		// Extract messages for store (without parts)
 		const messages = sdkMessages.map((msg) => ({
