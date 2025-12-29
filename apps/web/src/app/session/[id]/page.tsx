@@ -6,12 +6,15 @@ import type { Session } from "@opencode-ai/sdk/client"
 import { SessionLayout } from "./session-layout"
 import { Loader } from "@/components/ai-elements/loader"
 
-// SDK Message type is a union - we need the assistant/user message shape
-type SDKMessage = {
-	id: string
-	role: string
-	createdAt: string
-	parts?: unknown[]
+// SDK returns messages as {info: Message, parts: Part[]} envelope
+type SDKMessageEnvelope = {
+	info: {
+		id: string
+		role: string
+		createdAt: string
+		[key: string]: unknown
+	}
+	parts: unknown[]
 }
 
 interface Props {
@@ -53,26 +56,27 @@ async function getMessages(id: string, directory?: string) {
 			}
 		}
 
-		// SDK returns messages with {id, role, createdAt, parts[]}
-		const sdkMessages = (result.data as unknown as SDKMessage[]).filter(
-			(msg) => msg && typeof msg.id === "string",
+		// SDK returns messages as {info: Message, parts: Part[]} envelope
+		const sdkMessages = (result.data as unknown as SDKMessageEnvelope[]).filter(
+			(msg) => msg?.info && typeof msg.info.id === "string",
 		)
 
 		// Extract messages for store (without parts)
 		const messages = sdkMessages.map((msg) => ({
-			id: msg.id,
+			id: msg.info.id,
 			sessionID: id,
-			role: msg.role,
-			time: { created: new Date(msg.createdAt).getTime() },
+			role: msg.info.role,
+			time: { created: new Date(msg.info.createdAt).getTime() },
 		}))
 
 		// Extract parts grouped by messageID for store
 		const parts: Record<string, any[]> = {}
 		for (const msg of sdkMessages) {
+			const msgId = msg.info.id
 			if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
-				parts[msg.id] = msg.parts.map((part: any, index: number) => ({
-					id: part.id || `${msg.id}-part-${index}`,
-					messageID: msg.id,
+				parts[msgId] = msg.parts.map((part: any, index: number) => ({
+					id: part.id || `${msgId}-part-${index}`,
+					messageID: msgId,
 					type: part.type || "text",
 					content: part.content || part.text || "",
 					...part, // Preserve all other fields
@@ -80,9 +84,9 @@ async function getMessages(id: string, directory?: string) {
 			}
 		}
 
-		// Convert to OpenCodeMessage format for initial UI render
+		// Convert to OpenCodeMessage format for initial UI render (already in correct shape)
 		const opencodeMessages: OpenCodeMessage[] = sdkMessages.map((msg) => ({
-			info: msg as unknown as OpenCodeMessage["info"],
+			info: msg.info as unknown as OpenCodeMessage["info"],
 			parts: (msg.parts || []) as OpenCodeMessage["parts"],
 		}))
 
