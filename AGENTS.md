@@ -641,6 +641,42 @@ const summary = useOpencodeStore(
 - **Binary search everywhere** - Updates use binary search on sorted arrays. Assumes IDs are sortable (they are - ULIDs).
 - **Session limit** - UI loads 5 sessions by default + any updated in last 4 hours. Older sessions lazy-loaded.
 
+### Zustand Store Pattern (CRITICAL)
+
+**`useOpencodeStore()` returns a new reference on every render.** This causes infinite loops when used in useEffect/useCallback dependencies.
+
+```typescript
+// ❌ BAD - Causes infinite network requests
+const store = useOpencodeStore();
+useEffect(() => {
+  store.initDirectory(directory);
+}, [directory, store]); // store changes every render → infinite loop
+
+// ✅ GOOD - Use getState() for actions inside effects
+useEffect(() => {
+  useOpencodeStore.getState().initDirectory(directory);
+}, [directory]);
+
+// ✅ GOOD - Helper function pattern
+const getStoreActions = () => useOpencodeStore.getState();
+
+useEffect(() => {
+  getStoreActions().initDirectory(directory);
+}, [directory]);
+```
+
+**The Rule:**
+
+- Use `getState()` for **actions** inside effects/callbacks (stable reference)
+- Use the hook return value only for **selectors** (subscribing to state changes)
+
+**Files that follow this pattern:**
+
+- `apps/web/src/react/provider.tsx` - Uses `getStoreActions()` helper
+- `apps/web/src/react/use-multi-server-sse.ts` - Uses `getState()` in callback
+- `apps/web/src/app/projects-list.tsx` - Uses `getState()` in async functions
+- `apps/web/src/app/session/[id]/session-layout.tsx` - Uses `getState()` in useEffect
+
 ---
 
 ## References
