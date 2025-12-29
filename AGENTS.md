@@ -204,6 +204,8 @@ RED → GREEN → REFACTOR
 
 **Bug fixes:** Write test that reproduces bug FIRST, then fix. Prevents regression forever.
 
+**NO DOM TESTING.** Don't write tests that render React components with happy-dom/jsdom and assert on DOM output. It's brittle, slow, and tests implementation details. Test logic, not markup.
+
 See `@knowledge/tdd-patterns.md` for full doctrine.
 
 ### Fix Broken Shit (Non-Negotiable)
