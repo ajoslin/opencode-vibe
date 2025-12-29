@@ -8,10 +8,11 @@
  * Sessions auto-sort by last activity with smooth animations.
  */
 
-import { useEffect, useRef, useMemo } from "react"
+import { useEffect, useRef, useMemo, memo } from "react"
 import Link from "next/link"
 import { motion, AnimatePresence } from "framer-motion"
 import { useOpencodeStore } from "@/react/store"
+import { useShallow } from "zustand/react/shallow"
 import { useSSE } from "@/react/use-sse"
 import { useMultiServerSSE } from "@/react/use-multi-server-sse"
 import { useLiveTime } from "@/react/use-live-time"
@@ -84,50 +85,58 @@ function StatusIndicator({ status }: { status?: SessionStatus }) {
 /**
  * Single session row with live status and live-updating relative time
  */
-function SessionRow({ session, directory }: { session: SessionDisplay; directory: string }) {
-	// Subscribe to session status from store
-	const status = useOpencodeStore(
-		(state) => state.directories[directory]?.sessionStatus[session.id],
-	)
+const SessionRow = memo(
+	function SessionRow({ session, directory }: { session: SessionDisplay; directory: string }) {
+		// Subscribe to session status from store
+		const status = useOpencodeStore(
+			(state) => state.directories[directory]?.sessionStatus[session.id],
+		)
 
-	// Trigger re-render every 60 seconds for live time updates
-	useLiveTime()
+		// Trigger re-render every 60 seconds for live time updates
+		useLiveTime()
 
-	// Format time client-side for live updates
-	const relativeTime = formatRelativeTime(session.timestamp)
+		// Format time client-side for live updates
+		const relativeTime = formatRelativeTime(session.timestamp)
 
-	return (
-		<Link
-			href={`/session/${session.id}?dir=${encodeURIComponent(directory)}`}
-			className="flex items-center gap-3 p-3 rounded-lg border border-border bg-card hover:bg-secondary hover:border-accent transition-colors"
-		>
-			{/* Status indicator */}
-			<StatusIndicator status={status} />
+		return (
+			<Link
+				href={`/session/${session.id}?dir=${encodeURIComponent(directory)}`}
+				className="flex items-center gap-3 p-3 rounded-lg border border-border bg-card hover:bg-secondary hover:border-accent transition-colors"
+			>
+				{/* Status indicator */}
+				<StatusIndicator status={status} />
 
-			{/* Content */}
-			<div className="flex-1 min-w-0">
-				{/* Title */}
-				<div className="font-medium text-foreground text-sm line-clamp-1">
-					{session.title || "Untitled Session"}
+				{/* Content */}
+				<div className="flex-1 min-w-0">
+					{/* Title */}
+					<div className="font-medium text-foreground text-sm line-clamp-1">
+						{session.title || "Untitled Session"}
+					</div>
+
+					{/* Time - updates live every 60 seconds */}
+					<div className="text-xs text-muted-foreground mt-1">{relativeTime}</div>
 				</div>
-
-				{/* Time - updates live every 60 seconds */}
-				<div className="text-xs text-muted-foreground mt-1">{relativeTime}</div>
-			</div>
-		</Link>
-	)
-}
+			</Link>
+		)
+	},
+	(prev, next) => {
+		// Only re-render if session ID or directory changes
+		// Status changes will still trigger re-render via useOpencodeStore subscription
+		return prev.session.id === next.session.id && prev.directory === next.directory
+	},
+)
 
 /**
  * Hook to get sorted sessions for a project
  * Sorts by: running sessions first, then by last activity timestamp
  */
 function useSortedSessions(sessions: SessionDisplay[], directory: string) {
-	const sessionStatuses = useOpencodeStore(
-		(state) => state.directories[directory]?.sessionStatus ?? {},
-	)
-	const lastActivity = useOpencodeStore(
-		(state) => state.directories[directory]?.sessionLastActivity ?? {},
+	// Combine both selectors into single subscription to avoid cascade re-renders
+	const { sessionStatuses, lastActivity } = useOpencodeStore(
+		useShallow((state) => ({
+			sessionStatuses: state.directories[directory]?.sessionStatus ?? {},
+			lastActivity: state.directories[directory]?.sessionLastActivity ?? {},
+		})),
 	)
 
 	return useMemo(() => {
@@ -234,6 +243,13 @@ function deriveSessionStatus(
 /**
  * Bootstrap session statuses for all projects
  * Derives status from messages since /session/status is per-process in-memory
+ *
+ * TODO: PERF - This fetches messages for top 10 recent sessions synchronously on mount,
+ * blocking initial render. Consider:
+ * - Lazy load in background after initial render
+ * - Progressive enhancement: render immediately, update status when loaded
+ * - Server-side status derivation during SSR
+ * - Prioritize visible sessions only
  */
 function useBootstrapStatuses(projects: ProjectWithSessions[]) {
 	const bootstrappedRef = useRef(false)

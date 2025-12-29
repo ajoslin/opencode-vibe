@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useMemo } from "react"
+import { Fragment, useMemo, memo } from "react"
 import type { UIMessage, ChatStatus } from "ai"
 import { useMessagesWithParts } from "@/react/use-messages-with-parts"
 import { useSessionStatus } from "@/react/use-session-status"
@@ -32,6 +32,135 @@ interface SessionMessagesProps {
 	/** External status from parent (e.g., when sending a message) */
 	status?: ChatStatus
 }
+
+// Issue 3 fix: Stable filter function - extracted to module scope
+const hasNonEmptyParts = (message: UIMessage) => (message.parts?.length ?? 0) > 0
+
+// Issue 2 fix: Memoization helper for regex sanitization
+const sanitizeCache = new Map<string, string>()
+const sanitizeToolType = (type: string): string => {
+	if (sanitizeCache.has(type)) {
+		return sanitizeCache.get(type)!
+	}
+	const sanitized = type.replace(/[^a-zA-Z0-9\-_.]/g, "_")
+	sanitizeCache.set(type, sanitized)
+	return sanitized
+}
+
+/**
+ * Issue 1 fix: Memoized message renderer with content-aware comparison.
+ * Only re-renders when message content actually changes, not when other messages update.
+ */
+const MessageRenderer = memo(
+	({
+		message,
+		messageIndex,
+		status,
+	}: {
+		message: UIMessage
+		messageIndex: number
+		status: ChatStatus
+	}) => {
+		return (
+			<div className="flex flex-col gap-3">
+				{message.parts!.map((part, i) => {
+					// Generate stable key from message ID + part index
+					const partKey = `${message.id || messageIndex}-part-${i}`
+
+					if (part.type === "text") {
+						return (
+							<Message key={partKey} from={message.role}>
+								<MessageContent>
+									<MessageResponse>{part.text}</MessageResponse>
+								</MessageContent>
+							</Message>
+						)
+					}
+
+					if (part.type === "reasoning") {
+						return (
+							<Reasoning key={partKey} isStreaming={status === "streaming"}>
+								<ReasoningTrigger />
+								<ReasoningContent>{part.text}</ReasoningContent>
+							</Reasoning>
+						)
+					}
+
+					if (part.type?.startsWith("tool-")) {
+						const toolPart = part as {
+							type: `tool-${string}`
+							toolCallId?: string
+							title?: string
+							state?:
+								| "input-streaming"
+								| "input-available"
+								| "approval-requested"
+								| "approval-responded"
+								| "output-available"
+								| "output-error"
+								| "output-denied"
+							input?: unknown
+							output?: unknown
+							errorText?: string
+							_opencode?: any // Preserved OpenCode ToolPart
+						}
+
+						// Runtime sanitization - safety net for cached data with invalid chars
+						// Tool names with < > break React's createElement on Mobile Safari
+						// Use cached sanitization (Issue 2 fix)
+						const safeType = sanitizeToolType(toolPart.type) as typeof toolPart.type
+
+						// If OpenCode ToolPart is available, use enhanced ToolCard
+						if (toolPart._opencode) {
+							return <Tool key={partKey} toolPart={toolPart._opencode} />
+						}
+
+						// Fallback to basic AI SDK tool rendering
+						return (
+							<Tool key={partKey}>
+								<ToolHeader
+									title={toolPart.title || safeType.replace("tool-", "")}
+									type={safeType}
+									state={toolPart.state}
+								/>
+								<ToolContent>
+									<ToolInput input={toolPart.input} />
+									<ToolOutput output={toolPart.output} errorText={toolPart.errorText} />
+								</ToolContent>
+							</Tool>
+						)
+					}
+
+					// Unknown part type - render nothing but with a key
+					return <Fragment key={partKey} />
+				})}
+			</div>
+		)
+	},
+	// Content-aware comparison: only re-render if message identity or content changes
+	(prev, next) => {
+		// Compare message ID
+		if (prev.message.id !== next.message.id) return false
+		// Compare parts length (indicates content change)
+		if (prev.message.parts?.length !== next.message.parts?.length) return false
+		// Compare streaming status (affects reasoning component)
+		if (prev.status !== next.status) return false
+		// If last part exists, compare its type and content for streaming updates
+		const prevLastPart = prev.message.parts?.[prev.message.parts.length - 1]
+		const nextLastPart = next.message.parts?.[next.message.parts.length - 1]
+		if (prevLastPart?.type !== nextLastPart?.type) return false
+		// For text/reasoning, compare content
+		if (prevLastPart?.type === "text" || prevLastPart?.type === "reasoning") {
+			if ((prevLastPart as any).text !== (nextLastPart as any).text) return false
+		}
+		// For tools, compare state
+		if (prevLastPart?.type?.startsWith("tool-")) {
+			if ((prevLastPart as any).state !== (nextLastPart as any).state) return false
+		}
+		return true // Props are equal, skip re-render
+	},
+)
+MessageRenderer.displayName = "MessageRenderer"
 
 /**
  * Client component for session messages with real-time updates.
@@ -88,86 +217,14 @@ export function SessionMessages({
 					<ConversationEmptyState title="No messages yet" description="Start a conversation" />
 				) : (
 					<ConversationContent>
-						{messages
-							.filter((message) => (message.parts?.length ?? 0) > 0)
-							.map((message, messageIndex) => (
-								<div key={message.id || `msg-${messageIndex}`} className="flex flex-col gap-3">
-									{message.parts!.map((part, i) => {
-										// Generate stable key from message ID + part index
-										const partKey = `${message.id || messageIndex}-part-${i}`
-
-										if (part.type === "text") {
-											return (
-												<Message key={partKey} from={message.role}>
-													<MessageContent>
-														<MessageResponse>{part.text}</MessageResponse>
-													</MessageContent>
-												</Message>
-											)
-										}
-
-										if (part.type === "reasoning") {
-											return (
-												<Reasoning key={partKey} isStreaming={status === "streaming"}>
-													<ReasoningTrigger />
-													<ReasoningContent>{part.text}</ReasoningContent>
-												</Reasoning>
-											)
-										}
-
-										if (part.type?.startsWith("tool-")) {
-											const toolPart = part as {
-												type: `tool-${string}`
-												toolCallId?: string
-												title?: string
-												state?:
-													| "input-streaming"
-													| "input-available"
-													| "approval-requested"
-													| "approval-responded"
-													| "output-available"
-													| "output-error"
-													| "output-denied"
-												input?: unknown
-												output?: unknown
-												errorText?: string
-												_opencode?: any // Preserved OpenCode ToolPart
-											}
-
-											// Runtime sanitization - safety net for cached data with invalid chars
-											// Tool names with < > break React's createElement on Mobile Safari
-											// Use comprehensive sanitization - only allow valid element name chars
-											const safeType = toolPart.type.replace(
-												/[^a-zA-Z0-9\-_.]/g,
-												"_",
-											) as typeof toolPart.type
-
-											// If OpenCode ToolPart is available, use enhanced ToolCard
-											if (toolPart._opencode) {
-												return <Tool key={partKey} toolPart={toolPart._opencode} />
-											}
-
-											// Fallback to basic AI SDK tool rendering
-											return (
-												<Tool key={partKey}>
-													<ToolHeader
-														title={toolPart.title || safeType.replace("tool-", "")}
-														type={safeType}
-														state={toolPart.state}
-													/>
-													<ToolContent>
-														<ToolInput input={toolPart.input} />
-														<ToolOutput output={toolPart.output} errorText={toolPart.errorText} />
-													</ToolContent>
-												</Tool>
-											)
-										}
-
-										// Unknown part type - render nothing but with a key
-										return <Fragment key={partKey} />
-									})}
-								</div>
-							))}
+						{messages.filter(hasNonEmptyParts).map((message, messageIndex) => (
+							<MessageRenderer
+								key={message.id || `msg-${messageIndex}`}
+								message={message}
+								messageIndex={messageIndex}
+								status={status}
+							/>
+						))}
 						{status === "submitted" && <Loader />}
 					</ConversationContent>
 				)}

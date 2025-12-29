@@ -145,6 +145,10 @@ export const ConversationContent = ({
 	const { scrollRef, isSticking, scrollToBottomInstant } = useScrollContext()
 	const contentRef = useRef<HTMLDivElement>(null)
 
+	// Use ref to avoid recreating ResizeObserver on isSticking change
+	const isStickingRef = useRef(isSticking)
+	isStickingRef.current = isSticking
+
 	// Watch for content size changes and auto-scroll if sticking
 	// Uses INSTANT scroll to prevent bounce from overlapping smooth scrolls
 	useEffect(() => {
@@ -152,7 +156,7 @@ export const ConversationContent = ({
 		if (!content) return
 
 		const observer = new ResizeObserver(() => {
-			if (isSticking) {
+			if (isStickingRef.current) {
 				// Use requestAnimationFrame to batch with render
 				requestAnimationFrame(() => {
 					scrollToBottomInstant()
@@ -162,7 +166,7 @@ export const ConversationContent = ({
 
 		observer.observe(content)
 		return () => observer.disconnect()
-	}, [isSticking, scrollToBottomInstant])
+	}, [scrollToBottomInstant])
 
 	return (
 		<div

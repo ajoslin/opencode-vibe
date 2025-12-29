@@ -31,51 +31,49 @@ export function SessionStatus({ sessionId }: SessionStatusProps) {
 	const [error, setError] = useState<string | null>(null)
 	const { subscribe } = useSSE()
 
-	// Reset error when sessionId changes
+	// Subscribe to session events (error and status) and reset error on sessionId change
 	useEffect(() => {
+		// Reset error when sessionId changes
 		setError(null)
-	}, [sessionId])
 
-	// Subscribe to session.error events
-	useEffect(() => {
-		const unsubscribe = subscribe("session.error", (event: GlobalEvent) => {
-			const properties = (event.payload as any)?.properties
+		const unsubscribers = [
+			subscribe("session.error", (event: GlobalEvent) => {
+				const properties = (event.payload as any)?.properties
 
-			// Ignore malformed events
-			if (!properties) return
+				// Ignore malformed events
+				if (!properties) return
 
-			// Filter by sessionID
-			if (properties.sessionID !== sessionId) return
+				// Filter by sessionID
+				if (properties.sessionID !== sessionId) return
 
-			// Extract error message
-			const errorMessage = properties.error?.message
-			if (errorMessage) {
-				setError(errorMessage)
+				// Extract error message
+				const errorMessage = properties.error?.message
+				if (errorMessage) {
+					setError(errorMessage)
+				}
+			}),
+			subscribe("session.status", (event: GlobalEvent) => {
+				const properties = (event.payload as any)?.properties
+
+				// Ignore malformed events
+				if (!properties) return
+
+				// Filter by sessionID
+				if (properties.sessionID !== sessionId) return
+
+				// Clear error when session starts running
+				const status = properties.status
+				if (status && typeof status.running === "boolean" && status.running) {
+					setError(null)
+				}
+			}),
+		]
+
+		return () => {
+			for (const unsubscribe of unsubscribers) {
+				unsubscribe()
 			}
-		})
-
-		return unsubscribe
-	}, [sessionId, subscribe])
-
-	// Subscribe to session.status to clear error when session runs again
-	useEffect(() => {
-		const unsubscribe = subscribe("session.status", (event: GlobalEvent) => {
-			const properties = (event.payload as any)?.properties
-
-			// Ignore malformed events
-			if (!properties) return
-
-			// Filter by sessionID
-			if (properties.sessionID !== sessionId) return
-
-			// Clear error when session starts running
-			const status = properties.status
-			if (status && typeof status.running === "boolean" && status.running) {
-				setError(null)
-			}
-		})
-
-		return unsubscribe
+		}
 	}, [sessionId, subscribe])
 
 	// Error state takes precedence
