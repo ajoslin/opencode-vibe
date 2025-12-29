@@ -113,7 +113,7 @@ export interface Route<TInput = unknown, TOutput = unknown> {
  */
 export interface RouteBuilder<TInput = unknown, TOutput = unknown> {
 	/** Set input schema for validation */
-	input<T>(schema: Schema.Schema<T, unknown>): RouteBuilder<T, TOutput>
+	input<T>(schema: Schema.Schema.All & { Type: T }): RouteBuilder<T, TOutput>
 
 	/** Set request timeout */
 	timeout(duration: Duration): RouteBuilder<TInput, TOutput>

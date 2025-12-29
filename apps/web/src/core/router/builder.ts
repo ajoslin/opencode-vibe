@@ -31,9 +31,9 @@ class OpencodeRouteBuilder<TInput = unknown, TOutput = unknown>
 		this.config = { ...initialConfig }
 	}
 
-	input<T>(schema: Schema.Schema<T, unknown>): RouteBuilder<T, TOutput> {
+	input<T>(schema: Schema.Schema.All & { Type: T }): RouteBuilder<T, TOutput> {
 		const builder = this as unknown as OpencodeRouteBuilder<T, TOutput>
-		builder.inputSchema = schema
+		builder.inputSchema = schema as unknown as Schema.Schema<T, unknown>
 		return builder
 	}
 
