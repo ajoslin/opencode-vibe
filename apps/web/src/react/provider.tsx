@@ -22,7 +22,7 @@
 
 import { createContext, useContext, useCallback, useEffect, useRef, type ReactNode } from "react"
 import { toast } from "sonner"
-import { useSSE } from "./use-sse"
+import { SSEProvider, useSSE } from "./use-sse"
 import { useOpencodeStore } from "./store"
 import { createClient } from "@/core/client"
 import type { GlobalEvent, Session as SDKSession } from "@opencode-ai/sdk/client"
@@ -63,8 +63,23 @@ const getStoreActions = () => useOpencodeStore.getState()
 
 /**
  * OpenCodeProvider - Handles SSE events, bootstrap, and sync
+ *
+ * Wraps children with SSEProvider, then uses useSSE internally.
  */
 export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderProps) {
+	return (
+		<SSEProvider url={url}>
+			<OpenCodeProviderInner url={url} directory={directory}>
+				{children}
+			</OpenCodeProviderInner>
+		</SSEProvider>
+	)
+}
+
+/**
+ * Inner provider that uses SSE context (must be inside SSEProvider)
+ */
+function OpenCodeProviderInner({ url, directory, children }: OpenCodeProviderProps) {
 	const clientRef = useRef(createClient(directory))
 	const bootstrapCalledRef = useRef(false)
 	const bootstrapRef = useRef<() => Promise<void>>(() => Promise.resolve())
