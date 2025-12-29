@@ -185,26 +185,22 @@ const ToolComponent = ({ className, toolPart, children, ...props }: ToolProps) =
  * Problem: Immer creates new object references on every store update,
  * breaking React.memo shallow comparison even when content is identical.
  *
- * Solution: Compare actual content instead of references.
- * For OpenCode ToolPart: compare id, status, and metadata.
- * For AI SDK tools: compare children.
+ * Solution: Compare id and status only. Avoid JSON.stringify which can
+ * hang on large outputs (bash commands, file reads) or circular references.
+ * The id+status check is sufficient because:
+ * - Same id = same tool invocation
+ * - Status change = meaningful update (pending→running→completed)
+ * - Input/output don't change for a given tool invocation
  */
 export const Tool = React.memo(ToolComponent, (prev, next) => {
 	// Compare toolPart if provided (OpenCode tools)
 	if (prev.toolPart && next.toolPart) {
-		if (prev.toolPart.id !== next.toolPart.id) return false
-		if (prev.toolPart.state.status !== next.toolPart.state.status) return false
-
-		// Compare input and output when available
-		const prevInput = "input" in prev.toolPart.state ? prev.toolPart.state.input : undefined
-		const nextInput = "input" in next.toolPart.state ? next.toolPart.state.input : undefined
-		if (JSON.stringify(prevInput) !== JSON.stringify(nextInput)) return false
-
-		const prevOutput = "output" in prev.toolPart.state ? prev.toolPart.state.output : undefined
-		const nextOutput = "output" in next.toolPart.state ? next.toolPart.state.output : undefined
-		if (JSON.stringify(prevOutput) !== JSON.stringify(nextOutput)) return false
-
-		return true
+		// Same id + same status = no meaningful change
+		// Input/output are immutable for a given tool invocation
+		return (
+			prev.toolPart.id === next.toolPart.id &&
+			prev.toolPart.state.status === next.toolPart.state.status
+		)
 	}
 
 	// One has toolPart, other doesn't - not equal

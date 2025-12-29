@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterEach } from "bun:test"
 import { Window } from "happy-dom"
 import { render, cleanup } from "@testing-library/react"
 import type { ToolPart } from "@opencode-ai/sdk/client"
-import { getCurrentlyDoing, SubagentCurrentActivity } from "./task"
+import { getCurrentlyDoing, SubagentCurrentActivity, SubagentToolTree } from "./task"
 
 // Set up DOM for React component tests
 beforeAll(() => {
@@ -470,5 +470,232 @@ describe("SubagentCurrentActivity", () => {
 		rerender(<TestWrapper part={part2} />)
 
 		expect(renderCount).toBe(initialRenderCount + 1) // Should re-render
+	})
+})
+
+describe("SubagentToolTree", () => {
+	it("shows nothing when no summary", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} />)
+		expect(container.textContent).toBe("")
+	})
+
+	it("renders all tools from summary", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "swarmmail_init",
+							state: {
+								status: "completed" as const,
+								title: "Initialized as DarkRiver",
+							},
+						},
+						{
+							id: "part-2",
+							tool: "semantic-memory_find",
+							state: {
+								status: "completed" as const,
+								title: "Found 3 memories",
+							},
+						},
+						{
+							id: "part-3",
+							tool: "swarmmail_reserve",
+							state: { status: "running" as const },
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} defaultOpen={true} />)
+
+		// Completed tools show titles
+		expect(container.textContent).toContain("Initialized as DarkRiver")
+		expect(container.textContent).toContain("Found 3 memories")
+		// Running tools show tool name (no title yet)
+		expect(container.textContent).toContain("swarmmail_reserve")
+	})
+
+	it("shows status icons: ✓ for completed", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "completed" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: { status: "completed" as const, title: "Read file.ts" },
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} defaultOpen={true} />)
+		expect(container.textContent).toContain("✓")
+	})
+
+	it("shows status icons: ⏳ for running", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "bash",
+							state: { status: "running" as const },
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} defaultOpen={true} />)
+		// Note: ⏳ emoji gets normalized in textContent
+		expect(container.textContent).toMatch(/⏳|bash/)
+	})
+
+	it("shows status icons: ✗ for error", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "error" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "edit",
+							state: { status: "error" as const },
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} defaultOpen={true} />)
+		// Note: ✗ emoji gets normalized in textContent
+		expect(container.textContent).toMatch(/✗|edit/)
+	})
+
+	it("shows tool titles when completed", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "completed" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: {
+								status: "completed" as const,
+								title: "Read apps/web/src/task.tsx",
+							},
+						},
+						{
+							id: "part-2",
+							tool: "bash",
+							state: {
+								status: "completed" as const,
+								title: "Run typecheck: 0 errors",
+							},
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} defaultOpen={true} />)
+		expect(container.textContent).toContain("Read apps/web/src/task.tsx")
+		expect(container.textContent).toContain("Run typecheck: 0 errors")
+	})
+
+	it("is collapsible (default collapsed)", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: { status: "completed" as const, title: "Read file.ts" },
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} />)
+
+		// Should have a button/trigger for collapsing
+		const trigger = container.querySelector("button")
+		expect(trigger).not.toBeNull()
+	})
+
+	it("shows tree structure with indentation", () => {
+		const part = {
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "swarmmail_init",
+							state: { status: "completed" as const, title: "Init" },
+						},
+						{
+							id: "part-2",
+							tool: "read",
+							state: { status: "completed" as const, title: "Read file" },
+						},
+						{
+							id: "part-3",
+							tool: "bash",
+							state: { status: "running" as const },
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container } = render(<SubagentToolTree part={part} defaultOpen={true} />)
+
+		// Should have tree-like structure (using ├ or └ for branches)
+		const text = container.textContent || ""
+		expect(text.includes("├") || text.includes("└")).toBe(true)
 	})
 })

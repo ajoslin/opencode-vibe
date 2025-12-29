@@ -243,3 +243,138 @@ export const SubagentCurrentActivity = React.memo(
 		)
 	},
 )
+
+/**
+ * Maps tool status to Unicode icon.
+ * ✓ = completed
+ * ⏳ = running
+ * ✗ = error
+ * ◯ = pending
+ */
+function getStatusIcon(status: "pending" | "running" | "completed" | "error"): string {
+	const icons: Record<string, string> = {
+		completed: "✓",
+		running: "⏳",
+		error: "✗",
+		pending: "◯",
+	}
+	return icons[status] || "◯"
+}
+
+export type SubagentToolTreeProps = {
+	part: ToolPart
+	className?: string
+	defaultOpen?: boolean
+}
+
+/**
+ * Displays full tree of all tools executed by a subagent.
+ *
+ * Shows:
+ * - Full metadata.summary array as collapsible tree
+ * - Status icons: ✓ completed, ⏳ running, ✗ error, ◯ pending
+ * - Tool titles when completed
+ * - Tree structure with branch characters (├ └)
+ *
+ * Default collapsed. Click to expand/collapse.
+ */
+const SubagentToolTreeInternal = ({
+	part,
+	className,
+	defaultOpen = false,
+}: SubagentToolTreeProps) => {
+	const [isOpen, setIsOpen] = React.useState(defaultOpen)
+
+	if (part.type !== "tool" || part.tool !== "task") return null
+	if (part.state.status === "pending") return null
+
+	const metadata = part.state.metadata as TaskToolMetadata | undefined
+	const summary = metadata?.summary
+
+	if (!summary || summary.length === 0) return null
+
+	return (
+		<div className={cn("mt-2", className)}>
+			<button
+				type="button"
+				onClick={() => setIsOpen(!isOpen)}
+				className="group flex w-full items-center gap-2 text-muted-foreground text-xs transition-colors hover:text-foreground"
+			>
+				<ChevronDownIcon className={cn("size-3 transition-transform", !isOpen && "-rotate-90")} />
+				<span>Tools ({summary.length})</span>
+			</button>
+
+			{isOpen && (
+				<div className="mt-1">
+					<div className="space-y-0.5">
+						{summary.map((item, index) => {
+							const isLast = index === summary.length - 1
+							const branch = isLast ? "└" : "├"
+							const icon = getStatusIcon(item.state.status)
+
+							return (
+								<div key={item.id} className="flex items-start gap-1.5 font-mono text-xs">
+									<span className="text-muted-foreground">{branch}</span>
+									<span
+										className={cn("flex-shrink-0", {
+											"text-green-600": item.state.status === "completed",
+											"text-blue-600 animate-pulse": item.state.status === "running",
+											"text-red-600": item.state.status === "error",
+											"text-muted-foreground": item.state.status === "pending",
+										})}
+									>
+										{icon}
+									</span>
+									<span className="flex-1 text-foreground">{item.state.title || item.tool}</span>
+								</div>
+							)
+						})}
+					</div>
+				</div>
+			)}
+		</div>
+	)
+}
+
+/**
+ * Memoized with same content-aware comparison as SubagentCurrentActivity.
+ */
+export const SubagentToolTree = React.memo(SubagentToolTreeInternal, (prevProps, nextProps) => {
+	// Fast path: Compare IDs first
+	if (prevProps.part.id !== nextProps.part.id) return false
+
+	// Fast path: Compare status
+	if (prevProps.part.state.status !== nextProps.part.state.status) return false
+
+	// Extract metadata (safe for non-pending states)
+	const prevMetadata =
+		prevProps.part.state.status !== "pending"
+			? (prevProps.part.state.metadata as TaskToolMetadata | undefined)
+			: undefined
+	const nextMetadata =
+		nextProps.part.state.status !== "pending"
+			? (nextProps.part.state.metadata as TaskToolMetadata | undefined)
+			: undefined
+
+	// Deep compare summary content (Immer-safe)
+	const prevSummary = prevMetadata?.summary
+	const nextSummary = nextMetadata?.summary
+
+	// Both undefined/null - equal
+	if (!prevSummary && !nextSummary) return true
+
+	// One undefined, one defined - not equal
+	if (!prevSummary || !nextSummary) return false
+
+	// Different lengths - not equal
+	if (prevSummary.length !== nextSummary.length) return false
+
+	// Compare each item's content (id, status, tool, title)
+	return prevSummary.every(
+		(item, i) =>
+			item.id === nextSummary[i].id &&
+			item.state.status === nextSummary[i].state.status &&
+			item.tool === nextSummary[i].tool &&
+			item.state.title === nextSummary[i].state.title,
+	)
+})
