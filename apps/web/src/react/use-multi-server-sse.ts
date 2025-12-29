@@ -18,9 +18,15 @@
  * ```
  */
 
-import { useEffect } from "react";
-import { multiServerSSE } from "@/core/multi-server-sse";
-import { useOpencodeStore } from "./store";
+import { useEffect } from "react"
+import { multiServerSSE } from "@/core/multi-server-sse"
+import { useOpencodeStore } from "./store"
+
+/**
+ * Helper to get store actions without causing re-renders.
+ * Zustand's getState() returns stable action references.
+ */
+const getStoreActions = () => useOpencodeStore.getState()
 
 /**
  * Hook to subscribe to multi-server SSE events
@@ -32,24 +38,24 @@ import { useOpencodeStore } from "./store";
  * 4. On unmount: unsubscribe (but don't stop the singleton - other components may need it)
  */
 export function useMultiServerSSE() {
-  const store = useOpencodeStore();
+	useEffect(() => {
+		// Start multi-server discovery and SSE (idempotent - only starts once)
+		multiServerSSE.start()
 
-  useEffect(() => {
-    // Start multi-server discovery and SSE (idempotent - only starts once)
-    multiServerSSE.start();
+		// Subscribe to ALL events from all servers (not just status)
+		// This enables message/part updates from TUIs!
+		const unsubscribe = multiServerSSE.onEvent((event) => {
+			const store = getStoreActions()
 
-    // Subscribe to ALL events from all servers (not just status)
-    // This enables message/part updates from TUIs!
-    const unsubscribe = multiServerSSE.onEvent((event) => {
-      // Initialize directory if needed
-      store.initDirectory(event.directory);
+			// Initialize directory if needed
+			store.initDirectory(event.directory)
 
-      // Forward event to store - handles all event types
-      store.handleEvent(event.directory, event.payload);
-    });
+			// Forward event to store - handles all event types
+			store.handleEvent(event.directory, event.payload)
+		})
 
-    // Only unsubscribe, don't stop the singleton
-    // It stays running for the lifetime of the app
-    return unsubscribe;
-  }, [store]);
+		// Only unsubscribe, don't stop the singleton
+		// It stays running for the lifetime of the app
+		return unsubscribe
+	}, []) // Empty deps - only run once on mount
 }

@@ -320,7 +320,6 @@ function SessionContent({
 	const [debugPanelOpen, setDebugPanelOpen] = useState(false)
 	const toggleDebugPanel = () => setDebugPanelOpen((prev) => !prev)
 
-	const store = useOpencodeStore()
 	const { directory: contextDirectory } = useOpenCode()
 
 	// Subscribe to SSE events from all OpenCode servers
@@ -328,12 +327,13 @@ function SessionContent({
 
 	// Hydrate store with initial session data on mount
 	useEffect(() => {
+		const store = useOpencodeStore.getState()
 		// Add session to store if not already present
 		const existing = store.getSession(contextDirectory, sessionId)
 		if (!existing) {
 			store.addSession(contextDirectory, initialSession)
 		}
-	}, [sessionId, initialSession, store, contextDirectory])
+	}, [sessionId, initialSession, contextDirectory])
 
 	// Get reactive session data from store (updated via SSE)
 	const session = useSession(sessionId) ?? initialSession

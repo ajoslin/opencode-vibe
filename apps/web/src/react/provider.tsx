@@ -56,16 +56,23 @@ export interface OpenCodeProviderProps {
 }
 
 /**
+ * Helper to get store actions without causing re-renders.
+ * Zustand's getState() returns stable action references.
+ */
+const getStoreActions = () => useOpencodeStore.getState()
+
+/**
  * OpenCodeProvider - Handles SSE events, bootstrap, and sync
  */
 export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderProps) {
-	const store = useOpencodeStore()
 	const clientRef = useRef(createClient(directory))
+	const bootstrapCalledRef = useRef(false)
+	const bootstrapRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
-	// Initialize directory state
+	// Initialize directory state (once per directory)
 	useEffect(() => {
-		store.initDirectory(directory)
-	}, [directory, store])
+		getStoreActions().initDirectory(directory)
+	}, [directory])
 
 	/**
 	 * Bootstrap: Load initial data (sessions + statuses)
@@ -75,6 +82,7 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 	 */
 	const bootstrap = useCallback(async () => {
 		const client = clientRef.current
+		const store = getStoreActions()
 
 		// Load sessions first (most important)
 		try {
@@ -122,7 +130,10 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 				error instanceof Error ? error.message : error,
 			)
 		}
-	}, [directory, store])
+	}, [directory])
+
+	// Keep ref updated for stable access in callbacks
+	bootstrapRef.current = bootstrap
 
 	/**
 	 * Sync a specific session (messages + parts + todos + diffs)
@@ -133,6 +144,7 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 	const sync = useCallback(
 		async (sessionID: string) => {
 			const client = clientRef.current
+			const store = getStoreActions()
 
 			// Fetch all data in parallel, handling failures individually
 			const [messagesResult, todoResult, diffResult] = await Promise.allSettled([
@@ -176,7 +188,7 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 				})
 			}
 		},
-		[directory, store],
+		[directory],
 	)
 
 	/**
@@ -186,19 +198,20 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 		(event: GlobalEvent) => {
 			const eventDirectory = event.directory
 			const payload = event.payload
+			const store = getStoreActions()
 
 			// Route global events
 			if (eventDirectory === "global") {
 				// Handle global.disposed -> re-bootstrap
 				if ((payload?.type as string) === "global.disposed") {
-					bootstrap()
+					bootstrapRef.current()
 				}
 				return
 			}
 
 			// Handle server.instance.disposed -> re-bootstrap (same as global.disposed)
 			if ((payload?.type as string) === "server.instance.disposed") {
-				bootstrap()
+				bootstrapRef.current()
 				return
 			}
 
@@ -216,7 +229,7 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 				store.handleEvent(directory, payload)
 			}
 		},
-		[directory, store, bootstrap],
+		[directory],
 	)
 
 	// Subscribe to SSE events
@@ -252,14 +265,16 @@ export function OpenCodeProvider({ url, directory, children }: OpenCodeProviderP
 		}
 	}, [subscribe, handleEvent])
 
-	// Bootstrap on mount
+	// Bootstrap on mount (once)
 	useEffect(() => {
-		bootstrap()
+		if (!bootstrapCalledRef.current) {
+			bootstrapCalledRef.current = true
+			bootstrap()
+		}
 	}, [bootstrap])
 
-	// Get ready state
-	const dirState = store.directories[directory]
-	const ready = dirState?.ready ?? false
+	// Get ready state - this is the ONLY place we subscribe to store state
+	const ready = useOpencodeStore((state) => state.directories[directory]?.ready ?? false)
 
 	const value: OpenCodeContextValue = {
 		url,

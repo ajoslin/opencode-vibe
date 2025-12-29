@@ -236,7 +236,6 @@ function deriveSessionStatus(
  * Derives status from messages since /session/status is per-process in-memory
  */
 function useBootstrapStatuses(projects: ProjectWithSessions[]) {
-	const store = useOpencodeStore()
 	const bootstrappedRef = useRef(false)
 
 	useEffect(() => {
@@ -245,6 +244,8 @@ function useBootstrapStatuses(projects: ProjectWithSessions[]) {
 		bootstrappedRef.current = true
 
 		async function bootstrap() {
+			const store = useOpencodeStore.getState()
+
 			// Fetch status for each project in parallel
 			await Promise.all(
 				projects.map(async ({ project, sessions }) => {
@@ -275,7 +276,7 @@ function useBootstrapStatuses(projects: ProjectWithSessions[]) {
 									const status = deriveSessionStatus(messages)
 
 									if (status === "running") {
-										store.handleEvent(project.worktree, {
+										useOpencodeStore.getState().handleEvent(project.worktree, {
 											type: "session.status",
 											properties: {
 												sessionID: session.id,
@@ -296,7 +297,7 @@ function useBootstrapStatuses(projects: ProjectWithSessions[]) {
 		}
 
 		bootstrap()
-	}, [projects, store])
+	}, [projects])
 }
 
 /**
@@ -304,7 +305,6 @@ function useBootstrapStatuses(projects: ProjectWithSessions[]) {
  * Keeps session statuses fresh as they change
  */
 function useSSESubscription(projects: ProjectWithSessions[]) {
-	const store = useOpencodeStore()
 	const { subscribe } = useSSE()
 
 	useEffect(() => {
@@ -315,12 +315,12 @@ function useSSESubscription(projects: ProjectWithSessions[]) {
 		const unsubscribe = subscribe("session.status", (event) => {
 			// Only process events for our directories
 			if (directories.has(event.directory)) {
-				store.handleEvent(event.directory, event.payload)
+				useOpencodeStore.getState().handleEvent(event.directory, event.payload)
 			}
 		})
 
 		return unsubscribe
-	}, [projects, store, subscribe])
+	}, [projects, subscribe])
 }
 
 /**
