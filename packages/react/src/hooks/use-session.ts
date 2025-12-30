@@ -88,19 +88,20 @@ export function useSession(options: UseSessionOptions): UseSessionReturn {
 		const unsubscribe = multiServerSSE.onEvent((event) => {
 			const { type, properties } = event.payload
 
-			// Only handle session events for our session
-			if (!type.startsWith("session.")) return
+			// Handle session.created and session.updated events
+			if (type !== "session.created" && type !== "session.updated") return
 
 			const sessionData = properties.info as Session | undefined
-			const sessionId = sessionData?.id ?? (properties.sessionID as string | undefined)
+			if (!sessionData) return
+			if (sessionData.id !== sessionIdRef.current) return
 
-			if (!sessionId || sessionId !== sessionIdRef.current) return
-
-			if (type === "session.updated" && sessionData) {
-				setSession(sessionData)
-			} else if (type === "session.deleted") {
+			// Handle archived sessions (treat as deleted)
+			if (sessionData.time?.archived) {
 				setSession(null)
+				return
 			}
+
+			setSession(sessionData)
 		})
 
 		return unsubscribe

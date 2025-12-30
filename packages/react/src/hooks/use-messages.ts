@@ -92,27 +92,25 @@ export function useMessages(options: UseMessagesOptions): UseMessagesReturn {
 		const unsubscribe = multiServerSSE.onEvent((event) => {
 			const { type, properties } = event.payload
 
-			// Only handle message events for our session
-			if (!type.startsWith("message.")) return
+			// Handle message.updated events (server uses this for both create and update)
+			if (type !== "message.updated") return
 
 			const messageData = properties.info as Message | undefined
 			if (!messageData) return
 			if (messageData.sessionID !== sessionIdRef.current) return
 
-			if (type === "message.created" || type === "message.updated") {
-				setMessageList((prev) => {
-					// Use binary insert/update for O(log n) performance
-					const { found, index } = Binary.search(prev, messageData.id, (m) => m.id)
-					if (found) {
-						// Update existing message
-						const updated = [...prev]
-						updated[index] = messageData
-						return updated
-					}
-					// Insert new message in sorted position
-					return Binary.insert(prev, messageData, (m) => m.id)
-				})
-			}
+			setMessageList((prev) => {
+				// Use binary insert/update for O(log n) performance
+				const { found, index } = Binary.search(prev, messageData.id, (m) => m.id)
+				if (found) {
+					// Update existing message
+					const updated = [...prev]
+					updated[index] = messageData
+					return updated
+				}
+				// Insert new message in sorted position
+				return Binary.insert(prev, messageData, (m) => m.id)
+			})
 		})
 
 		return unsubscribe

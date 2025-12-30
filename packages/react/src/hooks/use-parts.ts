@@ -92,32 +92,27 @@ export function useParts(options: UsePartsOptions): UsePartsReturn {
 		const unsubscribe = multiServerSSE.onEvent((event) => {
 			const { type, properties } = event.payload
 
-			// Only handle part events
-			if (!type.startsWith("part.")) return
+			// Handle message.part.updated events
+			if (type !== "message.part.updated") return
 
-			const partData = properties.part as Part | undefined
+			const partData = properties.part as (Part & { sessionID?: string }) | undefined
 			if (!partData) return
 
-			// Filter by session - parts have messageID, need to check if it belongs to our session
-			// The part object should have sessionID from the message it belongs to
-			// If not available, we accept all parts (will be filtered by messageID in useMessagesWithParts)
-			const partSessionId = (partData as Part & { sessionID?: string }).sessionID
-			if (partSessionId && partSessionId !== sessionIdRef.current) return
+			// Filter by session - parts include sessionID
+			if (partData.sessionID && partData.sessionID !== sessionIdRef.current) return
 
-			if (type === "part.created" || type === "part.updated") {
-				setPartList((prev) => {
-					// Use binary insert/update for O(log n) performance
-					const { found, index } = Binary.search(prev, partData.id, (p) => p.id)
-					if (found) {
-						// Update existing part
-						const updated = [...prev]
-						updated[index] = partData
-						return updated
-					}
-					// Insert new part in sorted position
-					return Binary.insert(prev, partData, (p) => p.id)
-				})
-			}
+			setPartList((prev) => {
+				// Use binary insert/update for O(log n) performance
+				const { found, index } = Binary.search(prev, partData.id, (p) => p.id)
+				if (found) {
+					// Update existing part
+					const updated = [...prev]
+					updated[index] = partData
+					return updated
+				}
+				// Insert new part in sorted position
+				return Binary.insert(prev, partData, (p) => p.id)
+			})
 		})
 
 		return unsubscribe
