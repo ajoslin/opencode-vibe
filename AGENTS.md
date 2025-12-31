@@ -237,6 +237,121 @@ Adds LRU cache for session lookups, reducing backend calls by 80%.
 
 **Why?** Changesets get read. Make them worth reading. The quote grounds the work in wisdom. The art makes it memorable.
 
+**ASCII Art Inspiration (few-shot examples):**
+
+```
+# The Mass Migration 🦋
+        ⋆ ˚｡⋆୨♡୧⋆ ˚｡⋆
+    ,.  _~-.,               .
+   ~'`~ \/,_. ~=.,,,.,,,   /|,
+        /   '-._  /'   '\\=~
+       |  \     \|        |
+        \  '=.,_/         |
+         '-.,_   '~-.,_  /
+              '~.,_    '~
+    ╭──────────────────────╮
+    │  BUTTERFLY EFFECT    │
+    │  One small change... │
+    ╰──────────────────────╯
+
+# The Wise Owl 🦉
+       ___
+      (o o)
+     (  V  )
+    /--m-m--\
+    │ WHOOO │
+    │ KNOWS │
+    │ TYPES │
+    └───────┘
+
+# The Debugging Duck 🦆
+      __
+    <(o )___
+     ( ._> /
+      `---'
+    "Have you tried mass
+     explaining it to me?"
+
+# The Swarm 🐝
+       \   /
+    `. _\|/_ .'
+    - ( o bg) -    bzzzz
+    .' /|\  `.    
+       / | \      ╭─────────────╮
+      🐝 🐝 🐝    │ HIVE MIND   │
+     🐝 🐝 🐝 🐝  │ ACTIVATED   │
+    🐝 🐝 🐝 🐝 🐝 ╰─────────────╯
+
+# The Octopus Deploy 🐙
+         ___
+      .-'   '-.
+     /         \
+    |  (o) (o)  |
+     \  .____.  /
+      '.____.'
+    /|\/|\/|\/|\
+   / |  |  |  | \
+  EIGHT ARMS FOR
+  EIGHT MICROSERVICES
+
+# The Phoenix Refactor 🔥
+          ,//
+         ///
+        ////
+       /////
+    ,///////
+    ////////
+     '////'
+      '||'
+       ||  FROM THE ASHES
+       ||  OF LEGACY CODE
+      /||\  WE RISE
+     //||\\
+
+# The Crab Rave 🦀
+    (\/) (°,,°) (\/)
+      RUST SAYS:
+    "MEMORY SAFE, BB"
+    
+    ╱|、
+  (˚ˎ 。7  
+   |、˜〵          
+   じしˍ,)ノ
+
+# The Tree of Knowledge 🌳
+           🌟
+          /|\
+         / | \
+        /  |  \
+       /__🍎__\
+          ||
+          ||
+      ════╧════
+    FORBIDDEN FRUIT:
+    node_modules/
+
+# The Cosmic Turtle 🐢
+        ___-------___
+    _-~~             ~~-_
+ _-~                    /~-_
+/^\__/^\         /^\__/^\
+  |  |  |----------|  |  |
+  @  @  @          @  @  @
+    ALL THE WAY DOWN
+    (it's turtles)
+
+# The Kraken Release 🦑
+       ___
+    .-'   '-.
+   /  .-=-.  \   RELEASE
+  |  /     \  |    THE
+  | |  O O  | |   KRAKEN
+   \|  ___  |/
+    '.___.'
+   /||||||||\
+  //||||||||\\
+```
+
 ### TDD (Non-Negotiable)
 
 ```
