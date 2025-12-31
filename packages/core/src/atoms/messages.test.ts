@@ -260,6 +260,42 @@ describe("MessageAtom.get Effect program", () => {
 	})
 })
 
+describe("MessageAtom session-based routing", () => {
+	it("passes sessionId to createClient for list()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				messages: vi.fn(() => Promise.resolve({ data: [] })),
+			},
+		} as any)
+
+		await Effect.runPromise(MessageAtom.list("ses_routing_test", "/test/project"))
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_routing_test")
+	})
+
+	it("passes sessionId to createClient for get()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				messages: vi.fn(() =>
+					Promise.resolve({
+						data: [{ info: createMessage("msg-test", "ses_get_test"), parts: [] }],
+					}),
+				),
+			},
+		} as any)
+
+		await Effect.runPromise(MessageAtom.get("ses_get_test", "msg-test", "/test/project"))
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_get_test")
+	})
+})
+
 describe("MessageAtom composability", () => {
 	it("can be composed with other Effect programs", async () => {
 		const program = Effect.gen(function* () {

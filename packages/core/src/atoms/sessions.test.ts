@@ -177,6 +177,83 @@ describe("SessionAtom.get Effect program", () => {
 	})
 })
 
+describe("SessionAtom session-based routing", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("passes sessionId to createClient for get()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				get: vi.fn(() =>
+					Promise.resolve({
+						data: createMockSession({ id: "ses_456" }),
+					}),
+				),
+			},
+		} as any)
+
+		await Effect.runPromise(SessionAtom.get("ses_456", "/test/project"))
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_456")
+	})
+
+	it("passes sessionId to createClient for promptAsync()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				promptAsync: vi.fn(() => Promise.resolve({})),
+			},
+		} as any)
+
+		await Effect.runPromise(
+			SessionAtom.promptAsync(
+				"ses_789",
+				[{ type: "text", content: "Hello" }],
+				undefined,
+				"/test/project",
+			),
+		)
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_789")
+	})
+
+	it("passes sessionId to createClient for command()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				command: vi.fn(() => Promise.resolve({})),
+			},
+		} as any)
+
+		await Effect.runPromise(SessionAtom.command("ses_abc", "test", "args", "/test/project"))
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_abc")
+	})
+
+	it("list() does NOT pass sessionId (no session context yet)", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				list: vi.fn(() => Promise.resolve({ data: [] })),
+			},
+		} as any)
+
+		await Effect.runPromise(SessionAtom.list("/test/project"))
+
+		// list() should only pass directory, not sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project")
+	})
+})
+
 describe("SessionAtom composability", () => {
 	it("can be composed with other Effect programs", async () => {
 		const program = Effect.gen(function* () {

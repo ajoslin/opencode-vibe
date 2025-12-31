@@ -83,7 +83,8 @@ export const SessionAtom = {
 	 */
 	get: (id: string, directory?: string): Effect.Effect<Session | null, Error> =>
 		Effect.gen(function* () {
-			const client = createClient(directory)
+			// Pass sessionId for session-based routing (routes to correct server in multi-TUI setup)
+			const client = createClient(directory, id)
 
 			const response = yield* Effect.tryPromise({
 				try: () => client.session.get({ path: { id } }),
@@ -151,7 +152,8 @@ export const SessionAtom = {
 		directory?: string,
 	): Effect.Effect<void, Error> =>
 		Effect.gen(function* () {
-			const client = createClient(directory)
+			// Pass sessionId for session-based routing (routes to correct server in multi-TUI setup)
+			const client = createClient(directory, sessionId)
 
 			const body: { parts: any; model?: ModelSelection } = model
 				? { parts: parts as any, model }
@@ -191,7 +193,8 @@ export const SessionAtom = {
 		directory?: string,
 	): Effect.Effect<void, Error> =>
 		Effect.gen(function* () {
-			const client = createClient(directory)
+			// Pass sessionId for session-based routing (routes to correct server in multi-TUI setup)
+			const client = createClient(directory, sessionId)
 
 			yield* Effect.tryPromise({
 				try: () =>

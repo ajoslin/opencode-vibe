@@ -284,6 +284,47 @@ describe("PartAtom.get Effect program", () => {
 	})
 })
 
+describe("PartAtom session-based routing", () => {
+	it("passes sessionId to createClient for list()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				messages: vi.fn(() => Promise.resolve({ data: [] })),
+			},
+		} as any)
+
+		await Effect.runPromise(PartAtom.list("ses_routing_test", "/test/project"))
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_routing_test")
+	})
+
+	it("passes sessionId to createClient for get()", async () => {
+		const { createClient } = await import("../client/index.js")
+
+		vi.mocked(createClient).mockReturnValueOnce({
+			session: {
+				messages: vi.fn(() =>
+					Promise.resolve({
+						data: [
+							{
+								info: { id: "msg-1", sessionID: "ses_get_test" },
+								parts: [createPart("part-test", "msg-1")],
+							},
+						],
+					}),
+				),
+			},
+		} as any)
+
+		await Effect.runPromise(PartAtom.get("ses_get_test", "part-test", "/test/project"))
+
+		// Verify createClient was called with both directory AND sessionId
+		expect(createClient).toHaveBeenCalledWith("/test/project", "ses_get_test")
+	})
+})
+
 describe("PartAtom composability", () => {
 	it("can be composed with other Effect programs", async () => {
 		const program = Effect.gen(function* () {

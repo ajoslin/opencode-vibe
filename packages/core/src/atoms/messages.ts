@@ -45,7 +45,8 @@ export const MessageAtom = {
 	 */
 	list: (sessionId: string, directory?: string): Effect.Effect<Message[], Error> =>
 		Effect.gen(function* () {
-			const client = createClient(directory)
+			// Pass sessionId for session-based routing (routes to correct server in multi-TUI setup)
+			const client = createClient(directory, sessionId)
 
 			const response = yield* Effect.tryPromise({
 				try: () =>
