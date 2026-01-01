@@ -18,7 +18,7 @@ import { useEffect, useState, useRef } from "react"
 import { useOpencodeStore } from "../store"
 import type { SessionStatus } from "../store/types"
 import { createClient } from "@opencode-vibe/core/client"
-import { deriveSessionStatus } from "../store/status-utils"
+import { computeStatusSync } from "@opencode-vibe/core/api"
 
 /**
  * How long to keep "running" indicator lit after streaming ends
@@ -109,37 +109,29 @@ export function useMultiDirectoryStatus(
 			await Promise.all(
 				directories.map(async (directory) => {
 					try {
-						const sessions = initialSessions[directory] || []
 						const client = await createClient(directory)
 
-						// Only check recent sessions (updated in last 5 minutes) - likely active
-						const recentSessions = sessions.filter((s) => {
-							return s.formattedTime.includes("just now") || s.formattedTime.includes("m ago")
-						})
+						// Fetch SDK session.status() for REAL status (not inferred)
+						const statusResponse = await client.session.status()
+						const backendStatusMap =
+							(statusResponse.data as Record<string, { type: "idle" | "busy" | "retry" }> | null) ||
+							{}
 
-						// Check each recent session's messages to derive status
-						await Promise.all(
-							recentSessions.slice(0, 10).map(async (session) => {
-								try {
-									const messagesResponse = await client.session.messages({
-										path: { id: session.id },
-										query: { limit: 1 }, // Only need last message
-									})
+						// Normalize backend status format to SessionStatus
+						const normalizedStatuses: Record<string, SessionStatus> = {}
+						for (const [sessionId, backendStatus] of Object.entries(backendStatusMap)) {
+							if (backendStatus.type === "busy" || backendStatus.type === "retry") {
+								normalizedStatuses[sessionId] = "running"
+							} else {
+								normalizedStatuses[sessionId] = "completed"
+							}
+						}
 
-									const messages = messagesResponse.data ?? []
-									const status = deriveBootstrapStatus(messages)
-
-									if (status === "running") {
-										setSessionStatuses((prev) => ({
-											...prev,
-											[session.id]: "running",
-										}))
-									}
-								} catch {
-									// Ignore individual session errors
-								}
-							}),
-						)
+						// Merge into state
+						setSessionStatuses((prev) => ({
+							...prev,
+							...normalizedStatuses,
+						}))
 					} catch (error) {
 						console.error(`Failed to fetch status for ${directory}:`, error)
 					}
@@ -151,20 +143,28 @@ export function useMultiDirectoryStatus(
 	}, [directories, initialSessions])
 
 	/**
-	 * Subscribe to session status changes from store using batch selector
+	 * Subscribe to session status changes from store using Core API
 	 *
-	 * Uses deriveSessionStatus utility for consistent three-source status derivation:
+	 * Uses Core's computeStatusSync for consistent three-source status derivation:
 	 * 1. sessionStatus map (SSE events)
-	 * 2. Sub-agent activity (task parts)
+	 * 2. Sub-agent activity (task parts with state.status="running")
 	 * 3. Last message check (not used here - bootstrap only)
 	 *
 	 * **Batch selector pattern**: Single subscription gathers all session IDs,
-	 * then derives status for each using deriveSessionStatus utility. This avoids
+	 * then derives status for each using Core API synchronously. This avoids
 	 * Rules of Hooks violations (can't call hooks in loops).
 	 *
 	 * **Cooldown logic**:
 	 * - When status = "running": Immediately set to "running", cancel any pending cooldown
 	 * - When status = "completed": Start 1-minute cooldown timer, keep indicator green until timer expires
+	 *
+	 * **Metadata change detection** (VERIFIED bd-opencode-next--xts0a-mjvwegx7d89):
+	 * - Store handler uses full replacement: parts[index] = part (not parts[index].state = ...)
+	 * - Immer produces new object references on ANY nested mutation (including metadata changes)
+	 * - Zustand subscription triggers on any state change → computeStatusSync re-runs
+	 * - computeStatusSync checks part.state.status (not metadata), so metadata changes don't affect status
+	 * - BUT: Subscription ensures we re-compute immediately when part.state.status does change
+	 * - Characterization test confirms: metadata changes trigger re-computation as expected
 	 */
 	useEffect(() => {
 		const directorySet = new Set(directories)
@@ -180,12 +180,35 @@ export function useMultiDirectoryStatus(
 					...Object.keys(dirState.messages || {}),
 				])
 
-				// Derive status for each session using utility
+				// Derive status for each session using Core API
 				for (const sessionId of allSessionIds) {
-					const statusValue = deriveSessionStatus(state, sessionId, directory, {
-						includeSubAgents: true,
-						includeLastMessage: false, // Only for bootstrap
-					})
+					// Collect messages and parts for this session
+					const sessionMessages = dirState.messages[sessionId] || []
+					const messages = sessionMessages.map((m) => ({
+						id: m.id,
+						role: m.role || "user",
+						time: m.time,
+					}))
+					const parts = sessionMessages.flatMap((msg) =>
+						(dirState.parts[msg.id] || []).map((p) => ({
+							messageId: p.messageID,
+							type: p.type,
+							tool: p.tool as string | undefined,
+							state: p.state as { status?: string } | undefined,
+						})),
+					)
+
+					// Call Core API to compute status synchronously
+					const statusValue = computeStatusSync(
+						sessionId,
+						dirState.sessionStatus || {},
+						messages,
+						parts,
+						{
+							includeSubAgents: true,
+							includeLastMessage: false, // Only for bootstrap
+						},
+					)
 
 					// Debug log status changes
 					const prevStatus = sessionStatuses[sessionId]
@@ -242,7 +265,7 @@ export function useMultiDirectoryStatus(
 		})
 
 		return unsubscribe
-	}, [directories])
+	}, [directories, sessionStatuses])
 
 	return { sessionStatuses, lastActivity }
 }

@@ -28,14 +28,12 @@ export const Suggestion = ({
 	children,
 	...props
 }: SuggestionProps) => {
-	const handleClick = () => {
-		onClick?.(suggestion)
-	}
-
+	// Use inline handler to avoid stale closure
+	// React creates a new function each render, ensuring fresh props
 	return (
 		<Button
 			className={cn("cursor-pointer rounded-full px-4", className)}
-			onClick={handleClick}
+			onClick={() => onClick?.(suggestion)}
 			size={size}
 			type="button"
 			variant={variant}

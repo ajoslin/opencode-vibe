@@ -1,11 +1,10 @@
 /**
- * useMessagesWithParts - Store selector combining messages and parts
+ * useMessagesWithParts - Uses Core API to fetch messages with parts
  *
- * Selects messages from store and joins them with their parts.
- * Returns messages with associated parts in a single data structure.
+ * Fetches messages with parts pre-joined from Core layer via messages.listWithParts().
+ * Transforms Core's MessageWithParts to React's OpencodeMessage format.
  *
- * Uses useMemo to avoid creating new object references on every render,
- * which would cause infinite loops with useSyncExternalStore.
+ * This eliminates client-side joins - Core does the join at the data layer.
  *
  * @example
  * ```tsx
@@ -45,6 +44,11 @@ const EMPTY_PARTS: Part[] = []
 
 /**
  * Hook to get messages with their associated parts from store
+ *
+ * MIGRATION NOTE (ADR-016 Phase 2.5):
+ * This hook now uses store data populated by SSE events.
+ * Core's messages.listWithParts() is used for initial fetch/bootstrap
+ * but SSE events keep the store updated in real-time.
  *
  * @param sessionId - Session ID to fetch messages for
  * @returns Array of messages with parts (empty array if none)

@@ -57,5 +57,19 @@ export type Part = {
 	messageID: string
 	type: string
 	content: string
+	tool?: string
+	state?: {
+		status?: string
+		[key: string]: unknown
+	}
 	[key: string]: unknown // Allow additional fields
+}
+
+/**
+ * Session with computed status
+ * Used for rendering session lists with real-time status
+ */
+export interface SessionWithStatus {
+	session: Session
+	status: "pending" | "running" | "completed" | "error"
 }

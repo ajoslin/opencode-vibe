@@ -636,13 +636,14 @@ export class MultiServerSSE {
 			this.sessionToPort.set(sessionID, port)
 		}
 
-		// Debug logging for session.status events
-		if (payload.type === "session.status") {
-			console.debug("[MultiServerSSE] session.status event:", {
+		// Debug logging for ALL session-related events (session.created, session.updated, session.status)
+		// This provides observability for session lifecycle events at the SSE layer
+		if (payload.type.startsWith("session.")) {
+			console.debug(`[MultiServerSSE] ${payload.type} event:`, {
 				port,
 				directory,
-				sessionID: props.sessionID,
-				status: props.status,
+				sessionID,
+				payload: props,
 			})
 		}
 

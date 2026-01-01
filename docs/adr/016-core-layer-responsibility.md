@@ -531,48 +531,90 @@ export function useSessionStatus(sessionId: string): SessionStatus {
 
 **Rollback:** Feature flag `USE_CORE_STATUS_API`, dual implementation for 1 week
 
-### Phase 1.5: Backend Coordination (CRITICAL)
+### Phase 1.5: Backend Coordination (COMPLETE ✅)
 
 **Goal:** Verify backend capabilities BEFORE committing to Core API designs for Gaps 4, 6, 8.
 
-**Duration:** 2-3 days (async communication + spike if needed)
+**Status:** COMPLETE - All 3 questions answered (2026-01-01)
 
-**Why Now:** Phase 1 proved the pattern works. Before scaling to Phases 2-4, verify we're not solving problems backend should handle.
+**Backend Investigation Results:**
 
-**Critical Questions for Backend Team:**
+#### Gap 8 (Context Usage): ✅ YES - Backend includes token usage
 
-1. **Gap 8 (Context Usage):** Does backend include `contextUsage` in SSE `message.updated` events?
-   - IF YES: Skip Phase 4 entirely (2-3 days saved)
-   - IF NO: Find computation location (SSE handler?) and proceed with Core API
+Token usage IS included in SSE `message.updated` events. The `AssistantMessage` type includes:
 
-2. **Gap 4 (Bootstrap Status):** Can backend include `status` field in `/session/list` response?
-   - IF YES: Server-side solution (better performance than Core)
-   - IF NO: Proceed with Core `listWithStatus()` approach
+```typescript
+// packages/sdk/js/src/v2/gen/types.gen.ts:140-170
+tokens: {
+  input: number           // Input tokens (excluding cache)
+  output: number          // Output tokens
+  reasoning: number       // Reasoning tokens (extended thinking)
+  cache: {
+    read: number          // Cache read tokens
+    write: number         // Cache write tokens
+  }
+}
+```
 
-3. **Gap 6 (Status Normalization):** Will backend standardize status format to `"running" | "completed"`?
-   - IF YES: Problem solved at source, skip Core normalization
-   - IF NO: Proceed with Core `normalizeStatus()` in SSE layer
+**Flow:** On every `finish-step` during streaming, `Session.getUsage()` calculates tokens with provider-specific adjustments (Anthropic/Bedrock cache handling), then publishes via `MessageV2.Event.Updated` with the full payload.
 
-**Deliverables:**
-- Backend team commitment (YES/NO/MAYBE) per question
-- Updated Phase 2-4 plan based on answers
-- Document backend changes timeline if applicable
-- Go/no-go decision for remaining phases
+**Impact:** ✅ **Skip Phase 4 entirely** - React can read token usage directly from SSE events, no Core computation needed.
 
-**Success Criteria:**
-- All 3 questions answered by backend team
-- Updated implementation plan reflects backend answers
-- No wasted work (skip phases if backend solves gaps)
+#### Gap 4 (Bootstrap Status): ❌ NO - Separate endpoint required
 
-**Rollback Triggers:**
-- If backend team can't commit to ANY of the above → pause and escalate
-- If backend timeline is >1 month → proceed with Core approach as interim
-- If backend says "we already do this" for Gap 8 → validate immediately
+Status is NOT included in `/session/list`. Two separate endpoints exist:
 
-**Risk Mitigation:**
-- Frame as collaboration, not "can you do our work?"
-- Offer to implement backend changes if capacity issue
-- Document answers in ADR for future reference
+- `/session/list` → returns `Session.Info[]` (metadata only: id, title, timestamps, summary)
+- `/session/status` → returns `Record<sessionID, SessionStatus>` (all active statuses)
+
+**Why?** Status is ephemeral (in-memory), session metadata is persistent (storage).
+
+**Current pattern:**
+```typescript
+// packages/app/src/context/global-sync.tsx:161-163
+session: () => loadSessions(directory),
+status: () => sdk.session.status().then((x) => setStore("session_status", x.data!)),
+```
+
+**Impact:** ⚠️ **Proceed with Core `listWithStatus()` approach** - Core can combine both calls into single API for React convenience, or React continues making two calls.
+
+#### Gap 6 (Status Normalization): ✅ CONSISTENT - No normalization needed
+
+Three canonical values, same format everywhere:
+
+```typescript
+// packages/opencode/src/session/status.ts:6-25
+type SessionStatus =
+  | { type: "idle" }
+  | { type: "busy" }
+  | { type: "retry"; attempt: number; message: string; next: number }
+```
+
+| Status | Meaning | Notes |
+|--------|---------|-------|
+| `idle` | Not processing | Removed from in-memory map (won't appear in `/session/status`) |
+| `busy` | Currently processing | Active session |
+| `retry` | Waiting to retry | Includes `attempt`, `message`, `next` (timestamp) |
+
+Same Zod schema used for API responses, SSE events, and internal state.
+
+**Impact:** ✅ **Skip Phase 3 SSE normalization** - Backend is already consistent, no Core normalization needed.
+
+---
+
+**Summary of Phase 1.5 Findings:**
+
+| Gap | Answer | Action |
+|-----|--------|--------|
+| Gap 8 (Context Usage) | ✅ Included in SSE | **Skip Phase 4** - use `message.updated` events directly |
+| Gap 4 (Bootstrap Status) | ❌ Separate endpoint | **Proceed with Core** - `listWithStatus()` combines calls |
+| Gap 6 (Status Normalization) | ✅ Consistent | **Skip Phase 3** - no normalization needed |
+
+**Updated Implementation Plan:**
+- ~~Phase 3 (SSE Normalization)~~ → SKIPPED (backend consistent)
+- ~~Phase 4 (Context Usage)~~ → SKIPPED (backend provides in SSE)
+- Phase 2 (Data Transformation) → PROCEED (messages+parts join still needed)
+- Phase 6 (Cleanup) → PROCEED (router deletion still needed)
 
 ### Phase 2: Data Transformation (Priority 2 Gaps) - 2-3 days
 
@@ -773,19 +815,19 @@ describe("useSessionStatus integration", () => {
 - All features working
 - No dead imports
 
-### Migration Timeline
+### Migration Timeline (Updated after Phase 1.5)
 
-| Phase | Duration | LOC Impact | Risk |
-|-------|----------|------------|------|
-| Phase 0 (Runtime) | 2-3 days | +200 Core | Medium |
-| Phase 1 (Foundations) | 2-3 days | -300 React | Low |
-| Phase 1.5 (Backend Coordination) | 2-3 days | TBD | Low |
-| Phase 2 (Transformation) | 2-3 days | -150 React | Low |
-| Phase 3 (SSE Normalize) | 1-2 days | -40 React | Low |
-| Phase 4 (Context Usage) | 2-3 days | -120 React | Medium |
-| Phase 5 (Backend - Optional) | 1-2 weeks | TBD | Medium |
-| Phase 6 (Cleanup) | 1 day | -4,377 Router | Low |
-| **TOTAL** | **2.5-3.5 weeks** | **-4,987 net** | **Low-Medium** |
+| Phase | Duration | LOC Impact | Risk | Status |
+|-------|----------|------------|------|--------|
+| Phase 0 (Runtime) | 2-3 days | +200 Core | Medium | ✅ Complete |
+| Phase 1 (Foundations) | 2-3 days | -300 React | Low | ✅ Complete |
+| Phase 1.5 (Backend Coordination) | 1 day | N/A | Low | ✅ Complete |
+| Phase 2 (Transformation) | 2-3 days | -150 React | Low | 🔜 Next |
+| ~~Phase 3 (SSE Normalize)~~ | ~~1-2 days~~ | ~~-40 React~~ | ~~Low~~ | ⏭️ SKIPPED (backend consistent) |
+| ~~Phase 4 (Context Usage)~~ | ~~2-3 days~~ | ~~-120 React~~ | ~~Medium~~ | ⏭️ SKIPPED (backend provides) |
+| Phase 5 (Backend - Optional) | 1-2 weeks | TBD | Medium | 📋 Deferred |
+| Phase 6 (Cleanup) | 1 day | -4,377 Router | Low | 📋 Pending |
+| **TOTAL** | **~1.5 weeks remaining** | **-4,827 net** | **Low** |
 
 **Phasing Strategy:**
 - Each phase is independently shippable
@@ -837,24 +879,27 @@ describe("useSessionStatus integration", () => {
 | **Team learning** | None | Effect for Core only | Effect everywhere |
 | **Addresses problem** | ❌ No | ✅ Yes | ❌ Wrong problem |
 
-## Appendix B: The 8 Gaps Reference
+## Appendix B: The 8 Gaps Reference (Updated after Phase 1.5)
 
 Quick reference to gaps filled by Model B:
 
-| # | Gap | React LOC | Core LOC | API |
-|---|-----|-----------|----------|-----|
-| 1 | Session status computation | -300 | +100 | `sessions.getStatus()` |
-| 2 | Time formatting | -50 | +30 | `format.relativeTime()` |
-| 3 | Messages+Parts join | -70 | +50 | `messages.listWithParts()` |
-| 4 | Bootstrap status | -150 | +80 | `sessions.listWithStatus()` |
-| 5 | Prompt API transform | -80 | +60 | `prompt.convertToApiParts()` |
-| 6 | Status normalization | -40 | +20 | `sse.normalizeStatus()` (internal) |
-| 7 | Token formatting | -30 | +20 | `format.tokens()` |
-| 8 | Context usage | -120 | +70 | `sessions.getContextUsage()` |
+| # | Gap | React LOC | Core LOC | API | Status |
+|---|-----|-----------|----------|-----|--------|
+| 1 | Session status computation | -300 | +100 | `sessions.getStatus()` | ✅ Phase 1 |
+| 2 | Time formatting | -50 | +30 | `format.relativeTime()` | ✅ Phase 1 |
+| 3 | Messages+Parts join | -70 | +50 | `messages.listWithParts()` | 🔜 Phase 2 |
+| 4 | Bootstrap status | -150 | +80 | `sessions.listWithStatus()` | 🔜 Phase 2 |
+| 5 | Prompt API transform | -80 | +60 | `prompt.convertToApiParts()` | 🔜 Phase 2 |
+| 6 | Status normalization | ~~-40~~ | ~~+20~~ | ~~`sse.normalizeStatus()`~~ | ⏭️ **SKIPPED** |
+| 7 | Token formatting | -30 | +20 | `format.tokens()` | ✅ Phase 1 |
+| 8 | Context usage | ~~-120~~ | ~~+70~~ | ~~`sessions.getContextUsage()`~~ | ⏭️ **SKIPPED** |
 
-**Gap 8 Clarification:** The `useContextUsage()` hook currently reads from Zustand store, not computing directly. Verify if backend already sends `contextUsage` in SSE `message.updated` events. If YES, Gap 8 is already solved and Phase 4 can be skipped. If NO, find computation location (likely SSE handler) and migrate to Core.
+**Phase 1.5 Findings (2026-01-01):**
 
-**Total:** -840 React, +430 Core = **-410 net reduction**
+- **Gap 6 SKIPPED:** Backend uses consistent `SessionStatus` type (`idle | busy | retry`) across all SSE events and API responses. No normalization needed.
+- **Gap 8 SKIPPED:** Backend includes full `tokens` object in SSE `message.updated` events with `input`, `output`, `reasoning`, and `cache` fields. React reads directly from SSE, no Core computation needed.
+
+**Revised Total:** -680 React, +340 Core = **-340 net reduction** (plus 4,377 router deletion)
 
 ---
 

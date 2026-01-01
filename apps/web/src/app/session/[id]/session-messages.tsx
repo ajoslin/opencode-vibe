@@ -4,7 +4,6 @@ import { Fragment, useMemo, memo, useEffect } from "react"
 import type { UIMessage, ChatStatus } from "ai"
 import { useMessagesWithParts, useSessionStatus } from "@/app/hooks"
 import { useOpencodeStore } from "@opencode-vibe/react/store"
-import type { Message as CoreMessage, Part } from "@opencode-vibe/core/types"
 import {
 	transformMessages,
 	type ExtendedUIMessage,
@@ -241,9 +240,27 @@ const MessageRenderer = memo(
 		if (prevLastPart?.type === "text" || prevLastPart?.type === "reasoning") {
 			if ((prevLastPart as any).text !== (nextLastPart as any).text) return false
 		}
-		// For tools, compare state
+		// For tools, compare state AND _opencode metadata
 		if (prevLastPart?.type?.startsWith("tool-")) {
 			if ((prevLastPart as any).state !== (nextLastPart as any).state) return false
+			// Compare OpenCode ToolPart status and metadata (for task tools)
+			const prevOpencode = (prevLastPart as any)._opencode
+			const nextOpencode = (nextLastPart as any)._opencode
+			if (prevOpencode && nextOpencode) {
+				// Compare status
+				if (prevOpencode.state?.status !== nextOpencode.state?.status) return false
+				// For task tools, compare metadata.summary length and last item status
+				if (prevOpencode.tool === "task" && nextOpencode.tool === "task") {
+					const prevSummary = prevOpencode.state?.metadata?.summary
+					const nextSummary = nextOpencode.state?.metadata?.summary
+					if (prevSummary?.length !== nextSummary?.length) return false
+					if (prevSummary && nextSummary && prevSummary.length > 0) {
+						const prevLast = prevSummary[prevSummary.length - 1]
+						const nextLast = nextSummary[nextSummary.length - 1]
+						if (prevLast?.state?.status !== nextLast?.state?.status) return false
+					}
+				}
+			}
 		}
 		return true // Props are equal, skip re-render
 	},

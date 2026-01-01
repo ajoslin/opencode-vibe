@@ -81,6 +81,9 @@ function ToolPartView({ part }: { part: Part }) {
  *
  * Solution: Deep compare part content (id, type, content, state) instead
  * of reference equality.
+ *
+ * EXCEPTION: Task tools need deep comparison of metadata.summary because
+ * sub-agent activity updates the summary array while status stays "running".
  */
 export const PartRenderer = React.memo(PartRendererInternal, (prevProps, nextProps) => {
 	const prev = prevProps.part
@@ -106,6 +109,42 @@ export const PartRenderer = React.memo(PartRendererInternal, (prevProps, nextPro
 		const prevTool = (prev as any).tool
 		const nextTool = (next as any).tool
 		if (prevTool !== nextTool) return false
+
+		// Task tools: Compare metadata.summary for sub-agent activity updates
+		if (prevTool === "task" && nextTool === "task") {
+			// Extract metadata safely - only non-pending states have metadata
+			const prevMetadata =
+				prevState.status !== "pending"
+					? (prevState.metadata as
+							| { summary?: Array<{ id: string; state: { status: string } }> }
+							| undefined)
+					: undefined
+			const nextMetadata =
+				nextState.status !== "pending"
+					? (nextState.metadata as
+							| { summary?: Array<{ id: string; state: { status: string } }> }
+							| undefined)
+					: undefined
+
+			const prevSummary = prevMetadata?.summary
+			const nextSummary = nextMetadata?.summary
+
+			// Both undefined/null - equal
+			if (!prevSummary && !nextSummary) return true
+
+			// One undefined, one defined - not equal
+			if (!prevSummary || !nextSummary) return false
+
+			// Different lengths - not equal
+			if (prevSummary.length !== nextSummary.length) return false
+
+			// Compare summary item count and last item status (common case)
+			// Catches new tools being added AND status changes of existing tools
+			const prevLast = prevSummary[prevSummary.length - 1]
+			const nextLast = nextSummary[nextSummary.length - 1]
+
+			return prevLast?.id === nextLast?.id && prevLast?.state.status === nextLast?.state.status
+		}
 	}
 
 	// All checks passed - equal

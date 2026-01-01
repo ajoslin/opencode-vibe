@@ -269,30 +269,30 @@ Instance.provide({ directory: "/path" }, async () => {
 
 ### SSE Real-Time Sync Architecture
 
-**Event-driven state management with Zustand + Immer + React optimizations.**
+**Event-driven state management with jotai atoms + Core API.**
 
 ```
-SSE events → store.handleSSEEvent() → Zustand set() with Immer
-  → useOpencodeStore selectors → useDeferredValue → useMemo → React.memo → render
+SSE events → atom invalidation → Core API refetch → useMemo → React.memo → render
 ```
 
 **Key Files:**
-- `apps/web/src/react/use-sse.tsx` - SSE connection, event dispatch
-- `apps/web/src/react/store.ts` - Zustand store with Immer
-- `apps/web/src/react/use-messages-with-parts.ts` - Hook with `useDeferredValue`
+- `packages/react/src/hooks/internal/use-sse.ts` - SSE connection, atom invalidation
+- `packages/react/src/hooks/internal/use-messages-with-parts.ts` - Messages hook with useMemo
+- `packages/core/src/api/*.ts` - Core API for data fetching
 - `apps/web/src/components/ai-elements/task.tsx` - `React.memo` optimization
 
-**Store Structure:**
+**Architecture:**
 
 ```typescript
-// Binary search for updates (O(log n)), assumes ULID IDs are sortable
-interface OpencodeStore {
-  sessions: Session[]; // Sorted by ID
-  messages: Message[]; // Sorted by ID
-  parts: Part[]; // Sorted by ID
-
-  handleSSEEvent(event); // Entry point from SSE
-  handleEvent(payload); // Dispatches to specific handlers
+// No client-side store - hooks call Core API directly
+// Atoms track SSE connection state and trigger refetch
+export function useMessagesWithParts(sessionId: string): OpencodeMessage[] {
+  const messages = useOpencodeStore((state) => state.directories[dir]?.messages[sessionId])
+  const partsMap = useOpencodeStore((state) => state.directories[dir]?.parts)
+  
+  return useMemo(() => {
+    return messages.map(msg => ({ info: msg, parts: partsMap?.[msg.id] ?? [] }))
+  }, [messages, partsMap])
 }
 ```
 
@@ -369,16 +369,7 @@ export const Task = React.memo(TaskComponent, (prev, next) => {
 });
 ```
 
-### useDeferredValue Lag
 
-**Reality:** This is **expected behavior**, not a bug. `useDeferredValue` intentionally lags behind during rapid updates to prevent blocking UI.
-
-```typescript
-const messages = useOpencodeStore((state) => state.messages);
-const deferredMessages = useDeferredValue(messages); // Lags during rapid updates
-```
-
-**When It's Noticeable:** Most visible during AI streaming when parts update every 100-500ms. The deferred value lags by 1-2 frames.
 
 ### SDK Gotchas
 

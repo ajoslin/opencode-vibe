@@ -338,11 +338,7 @@ export type MessageBranchSelectorProps = React.ComponentProps<"div"> & {
 	from: UIMessage["role"]
 }
 
-export const MessageBranchSelector = ({
-	className,
-	from,
-	...props
-}: MessageBranchSelectorProps) => {
+export const MessageBranchSelector = ({ ...props }: MessageBranchSelectorProps) => {
 	const { totalBranches } = useMessageBranch()
 
 	// Don't render if there's only one branch
@@ -381,7 +377,7 @@ export const MessageBranchPrevious = ({ children, ...props }: MessageBranchPrevi
 
 export type MessageBranchNextProps = ComponentProps<typeof Button>
 
-export const MessageBranchNext = ({ children, className, ...props }: MessageBranchNextProps) => {
+export const MessageBranchNext = ({ children, ...props }: MessageBranchNextProps) => {
 	const { goToNext, totalBranches } = useMessageBranch()
 
 	return (
@@ -441,63 +437,6 @@ const VALID_DOM_ATTRIBUTES = new Set([
 	"role",
 	"tabIndex",
 	"key",
-])
-
-/**
- * Tags that look like TypeScript syntax and should be rendered as fragments.
- * These are commonly parsed from code blocks containing generics like Map<string, any>.
- * We render them as fragments (just children) to avoid React warnings about unknown elements.
- */
-const TYPESCRIPT_LIKE_TAGS = new Set([
-	// Single letter generics
-	"t",
-	"k",
-	"v",
-	"r",
-	"s",
-	"u",
-	"p",
-	"e",
-	// TypeScript keywords/types
-	"any",
-	"void",
-	"unknown",
-	"never",
-	"null",
-	"undefined",
-	"string",
-	"number",
-	"boolean",
-	"object",
-	"symbol",
-	"bigint",
-	"function",
-	"anonymous",
-	// Common generic type names
-	"promise",
-	"array",
-	"map",
-	"set",
-	"record",
-	"partial",
-	"required",
-	"readonly",
-	"pick",
-	"omit",
-	"exclude",
-	"extract",
-	"awaited",
-	"returntype",
-	"parameters",
-	"instancetype",
-	"thistype",
-	// Tags with trailing punctuation (from malformed parsing)
-	"string,",
-	"number,",
-	"boolean,",
-	"any,",
-	"void,",
-	"unknown,",
 ])
 
 /**

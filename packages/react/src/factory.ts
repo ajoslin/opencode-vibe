@@ -32,11 +32,10 @@ import { useServers as useServersBase } from "./hooks/use-servers"
 import type { UseServersReturn } from "./hooks/use-servers"
 import { multiServerSSE } from "@opencode-vibe/core/sse"
 import type { Prompt } from "./types/prompt"
-import { providers, projects, sessions } from "@opencode-vibe/core/api"
+import { providers, projects, sessions, prompt } from "@opencode-vibe/core/api"
 import type { Provider, Project } from "@opencode-vibe/core/atoms"
 import type { SlashCommand } from "./types/prompt"
 import { createClient } from "./lib/client-stub"
-import { convertToApiParts } from "./lib/prompt-api"
 import fuzzysort from "fuzzysort"
 import {
 	useMultiDirectorySessions as useMultiDirectorySessionsBase,
@@ -341,7 +340,7 @@ export function generateOpencodeHelpers<TRouter = any>(config?: OpencodeConfig) 
 				}
 
 				// Regular prompt - convert and send via session.promptAsync
-				const apiParts = convertToApiParts(parts, cfg.directory || "")
+				const apiParts = prompt.convertToApiParts(parts, cfg.directory || "")
 				console.log("[processMessage] sending prompt:", {
 					sessionId: options.sessionId,
 					apiParts,

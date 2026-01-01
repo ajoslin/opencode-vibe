@@ -782,4 +782,178 @@ describe("useOpencodeStore", () => {
 			expect(contextUsage?.limit).toBe(128000)
 		})
 	})
+
+	describe("part update reference equality (for React.memo)", () => {
+		beforeEach(() => {
+			useOpencodeStore.getState().initDirectory("/test/project")
+		})
+
+		it("should produce NEW part reference when part.updated event arrives", () => {
+			const actions = useOpencodeStore.getState()
+
+			// Initial part
+			const initialPart = {
+				id: "part-1",
+				messageID: "msg-1",
+				type: "text",
+				content: "Hello",
+				state: {
+					status: "streaming",
+					metadata: {
+						summary: "Initial summary",
+					},
+				},
+			}
+
+			actions.handleEvent("/test/project", {
+				type: "message.part.updated",
+				properties: { part: initialPart },
+			})
+
+			// Get reference to the part in store
+			const firstPartRef =
+				useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]?.[0]
+			expect(firstPartRef).toBeDefined()
+			expect(firstPartRef?.state?.metadata?.summary).toBe("Initial summary")
+
+			// Update part with new metadata
+			const updatedPart = {
+				id: "part-1",
+				messageID: "msg-1",
+				type: "text",
+				content: "Hello",
+				state: {
+					status: "complete",
+					metadata: {
+						summary: "Updated summary",
+					},
+				},
+			}
+
+			actions.handleEvent("/test/project", {
+				type: "message.part.updated",
+				properties: { part: updatedPart },
+			})
+
+			// Get reference to the updated part
+			const secondPartRef =
+				useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]?.[0]
+
+			// CRITICAL ASSERTIONS for React.memo
+			// 1. Object.is should return false (different references)
+			expect(Object.is(firstPartRef, secondPartRef)).toBe(false)
+
+			// 2. Nested metadata should be updated
+			expect(secondPartRef?.state?.metadata?.summary).toBe("Updated summary")
+			expect(secondPartRef?.state?.status).toBe("complete")
+
+			// 3. Parts array should still have only one item
+			const partsArray = useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]
+			expect(partsArray).toHaveLength(1)
+		})
+
+		it("should produce NEW part reference even when only nested metadata changes", () => {
+			const actions = useOpencodeStore.getState()
+
+			// Initial part
+			const initialPart = {
+				id: "part-1",
+				messageID: "msg-1",
+				type: "task",
+				content: "Running task",
+				state: {
+					status: "running",
+					metadata: {
+						summary: "Task running",
+					},
+				},
+			}
+
+			actions.handleEvent("/test/project", {
+				type: "message.part.updated",
+				properties: { part: initialPart },
+			})
+
+			const firstPartRef =
+				useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]?.[0]
+
+			// Update ONLY nested metadata (same content, same status)
+			const updatedPart = {
+				id: "part-1",
+				messageID: "msg-1",
+				type: "task",
+				content: "Running task", // Same
+				state: {
+					status: "running", // Same
+					metadata: {
+						summary: "Task completed with result", // Changed
+					},
+				},
+			}
+
+			actions.handleEvent("/test/project", {
+				type: "message.part.updated",
+				properties: { part: updatedPart },
+			})
+
+			const secondPartRef =
+				useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]?.[0]
+
+			// Even though only nested metadata changed, should still produce new reference
+			expect(Object.is(firstPartRef, secondPartRef)).toBe(false)
+			expect(secondPartRef?.state?.metadata?.summary).toBe("Task completed with result")
+		})
+
+		it("should handle multiple sequential updates with new references each time", () => {
+			const actions = useOpencodeStore.getState()
+
+			const partUpdates = [
+				{
+					id: "part-1",
+					messageID: "msg-1",
+					type: "text",
+					content: "Step 1",
+					state: { status: "pending", metadata: { summary: "Step 1" } },
+				},
+				{
+					id: "part-1",
+					messageID: "msg-1",
+					type: "text",
+					content: "Step 2",
+					state: { status: "running", metadata: { summary: "Step 2" } },
+				},
+				{
+					id: "part-1",
+					messageID: "msg-1",
+					type: "text",
+					content: "Step 3",
+					state: { status: "complete", metadata: { summary: "Step 3" } },
+				},
+			]
+
+			const refs: unknown[] = []
+
+			for (const part of partUpdates) {
+				actions.handleEvent("/test/project", {
+					type: "message.part.updated",
+					properties: { part },
+				})
+
+				const currentRef =
+					useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]?.[0]
+				refs.push(currentRef)
+			}
+
+			// All three references should be different
+			expect(Object.is(refs[0], refs[1])).toBe(false)
+			expect(Object.is(refs[1], refs[2])).toBe(false)
+			expect(Object.is(refs[0], refs[2])).toBe(false)
+
+			// Final state should match last update
+			const finalPart =
+				useOpencodeStore.getState().directories["/test/project"]?.parts["msg-1"]?.[0]
+			expect(finalPart?.state?.status).toBe("complete")
+			expect(finalPart?.state?.metadata?.summary).toBe("Step 3")
+		})
+	})
 })

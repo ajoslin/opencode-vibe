@@ -1,12 +1,11 @@
 /**
- * Status utilities for deriving session status from multiple sources
+ * Status utilities - Wrapper around Core layer
  *
- * Three-source session status architecture:
- * 1. sessionStatus map - Populated by SSE session.status events
- * 2. Sub-agent activity - Task parts with status="running"
- * 3. Last message check - Assistant message without time.completed (bootstrap edge case)
+ * Status computation logic has been migrated to `@opencode-vibe/core/api`.
+ * This file provides a compatibility layer for existing React code.
  */
 
+import { computeStatusSync } from "@opencode-vibe/core/api"
 import type { SessionStatus } from "./types"
 
 /**
@@ -28,6 +27,8 @@ interface OpencodeState {
 			parts?: Record<
 				string,
 				Array<{
+					id: string
+					messageID: string
 					type: string
 					tool?: string
 					state?: {
@@ -59,24 +60,16 @@ export interface DeriveSessionStatusOptions {
 /**
  * Derive session status from multiple sources
  *
- * Combines three sources of truth:
- * 1. **sessionStatus map** - Populated by SSE session.status events (main source)
- * 2. **Sub-agent activity** - Task parts with status="running" (parallel work indicator)
- * 3. **Last message check** - Assistant message without time.completed (bootstrap only)
+ * This is a compatibility wrapper around Core's `computeStatusSync`.
+ * Extracts data from Zustand store state and calls Core API.
+ *
+ * @deprecated Prefer using `computeStatusSync` from `@opencode-vibe/core/api` directly
  *
  * @param state - Zustand store state
  * @param sessionId - Session ID
  * @param directory - Project directory path
  * @param options - Status derivation options
  * @returns Session status ("running" | "completed")
- *
- * @example
- * ```tsx
- * const status = deriveSessionStatus(state, "ses-123", "/project", {
- *   includeSubAgents: true,
- *   includeLastMessage: false
- * })
- * ```
  */
 export function deriveSessionStatus(
 	state: OpencodeState,
@@ -84,42 +77,27 @@ export function deriveSessionStatus(
 	directory: string,
 	options: DeriveSessionStatusOptions = {},
 ): SessionStatus {
-	const { includeSubAgents = true, includeLastMessage = false } = options
-
 	const dir = state.directories[directory]
 	if (!dir) return "completed"
 
-	// SOURCE 1: Main session status from store (highest priority)
-	const mainStatus = dir.sessionStatus?.[sessionId] ?? "completed"
-	if (mainStatus === "running") return "running"
+	// Extract messages for this session
+	const messages = (dir.messages?.[sessionId] || []).map((m) => ({
+		id: m.id,
+		role: m.role || "user",
+		time: m.time,
+	}))
 
-	// SOURCE 2: Sub-agent activity (task parts with status="running")
-	if (includeSubAgents) {
-		const messages = dir.messages?.[sessionId]
-		if (messages) {
-			for (const message of messages) {
-				const parts = dir.parts?.[message.id]
-				if (!parts) continue
+	// Extract all parts for this session's messages
+	const sessionMessages = dir.messages?.[sessionId] || []
+	const parts = sessionMessages.flatMap((msg) =>
+		(dir.parts?.[msg.id] || []).map((p) => ({
+			messageId: p.messageID,
+			type: p.type,
+			tool: p.tool,
+			state: p.state,
+		})),
+	)
 
-				for (const part of parts) {
-					if (part.type === "tool" && part.tool === "task" && part.state?.status === "running") {
-						return "running"
-					}
-				}
-			}
-		}
-	}
-
-	// SOURCE 3: Last message check (bootstrap edge case)
-	if (includeLastMessage) {
-		const messages = dir.messages?.[sessionId]
-		if (messages && messages.length > 0) {
-			const lastMessage = messages[messages.length - 1]
-			if (lastMessage.role === "assistant" && !lastMessage.time?.completed) {
-				return "running"
-			}
-		}
-	}
-
-	return mainStatus
+	// Call Core API
+	return computeStatusSync(sessionId, dir.sessionStatus || {}, messages, parts, options)
 }

@@ -1,9 +1,13 @@
 # @opencode-vibe/react API Design
 
 **Date**: 2025-12-29  
-**Status**: Draft  
+**Status**: Draft (HISTORICAL - Zustand store was removed)  
 **Cell**: opencode-next--xts0a-mjrn4xxpf95  
 **Epic**: opencode-next--xts0a-mjrn4xx251c
+
+> **Historical Note (2026-01-01)**: This design doc describes the Zustand-based architecture.
+> The store was removed in commit 8e40992. References to `useDeferredValue` are outdated.
+> Current implementation uses jotai atoms with direct Core API calls.
 
 ---
 

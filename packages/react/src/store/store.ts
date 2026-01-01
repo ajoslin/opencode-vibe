@@ -243,12 +243,19 @@ export const useOpencodeStore = create<OpencodeState & OpencodeActions>()(
 					case "session.created":
 					case "session.updated": {
 						const session = event.properties.info as Session
+						const beforeCount = dir.sessions.length
 						const result = Binary.search(dir.sessions, session.id, (s: Session) => s.id)
+						const isNewSession = !result.found
 
 						// Handle archived sessions (remove them)
 						if (session.time.archived) {
 							if (result.found) {
 								dir.sessions.splice(result.index, 1)
+								console.log("[store] Removed archived session:", {
+									sessionId: session.id,
+									directory,
+									remainingCount: dir.sessions.length,
+								})
 							}
 							break
 						}
@@ -256,8 +263,23 @@ export const useOpencodeStore = create<OpencodeState & OpencodeActions>()(
 						// Update or insert
 						if (result.found) {
 							dir.sessions[result.index] = session
+							console.log("[store] Updated existing session:", {
+								sessionId: session.id,
+								directory,
+								beforeCount,
+								afterCount: dir.sessions.length,
+							})
 						} else {
 							dir.sessions.splice(result.index, 0, session)
+							console.log("[store] Added NEW session:", {
+								sessionId: session.id,
+								title: session.title,
+								directory,
+								insertedAtIndex: result.index,
+								beforeCount,
+								afterCount: dir.sessions.length,
+								allSessionIds: dir.sessions.map((s) => s.id),
+							})
 						}
 						break
 					}

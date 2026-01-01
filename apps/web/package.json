@@ -12,9 +12,9 @@
 		"type-check": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@opencode-vibe/react": "workspace:*",
-		"@opencode-vibe/core": "workspace:*",
 		"@opencode-ai/sdk": "^1.0.203",
+		"@opencode-vibe/core": "workspace:*",
+		"@opencode-vibe/react": "workspace:*",
 		"@radix-ui/react-collapsible": "^1.1.12",
 		"@radix-ui/react-dialog": "^1.1.15",
 		"@radix-ui/react-dropdown-menu": "^2.1.16",
@@ -31,7 +31,7 @@
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
-		"effect": "^3.19.13",
+		"effect": "3.19.14",
 		"embla-carousel-react": "^8.6.0",
 		"eventsource-parser": "^3.0.6",
 		"framer-motion": "^12.23.26",

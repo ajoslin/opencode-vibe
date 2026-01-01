@@ -234,14 +234,15 @@ export const SubagentCurrentActivity = React.memo(
 		// Different lengths - not equal
 		if (prevSummary.length !== nextSummary.length) return false
 
-		// Compare each item's content (id, status, tool)
+		// Compare each item's content (id, status, tool, title)
 		return prevSummary.every((item, i) => {
 			const nextItem = nextSummary[i]
 			return (
 				nextItem &&
 				item.id === nextItem.id &&
 				item.state.status === nextItem.state.status &&
-				item.tool === nextItem.tool
+				item.tool === nextItem.tool &&
+				item.state.title === nextItem.state.title
 			)
 		})
 	},

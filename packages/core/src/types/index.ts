@@ -11,9 +11,17 @@ export type {
 	PromptPart,
 	Prompt,
 	SlashCommand,
+	ApiTextPart,
+	ApiFilePart,
+	ApiImagePart,
+	ApiPart,
 } from "./prompt.js"
 
-export type { Session, Message, Part } from "./domain.js"
+export type { Session, Message, Part, SessionWithStatus } from "./domain.js"
+
+export type { MessageWithParts } from "./messages.js"
+
+export type { BackendSessionStatus, normalizeBackendStatus } from "./sessions.js"
 
 export type {
 	GlobalEvent,

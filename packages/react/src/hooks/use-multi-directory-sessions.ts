@@ -2,7 +2,7 @@
  * useMultiDirectorySessions - Get sessions from multiple directories
  *
  * Returns sessions from the Zustand store for multiple project directories.
- * Merges store sessions with optional initial data. Subscribes to real-time updates via SSE.
+ * Subscribes to real-time updates via SSE.
  *
  * @example
  * ```tsx
@@ -13,9 +13,9 @@
 
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState } from "react"
+import { formatRelativeTime } from "@opencode-vibe/core/utils"
 import { useOpencodeStore } from "../store"
-import type { Session } from "../store/types"
 
 /**
  * Session in display format (for UI)
@@ -41,40 +41,30 @@ export function useMultiDirectorySessions(directories: string[]): Record<string,
 	const [liveSessions, setLiveSessions] = useState<Record<string, SessionDisplay[]>>({})
 
 	/**
-	 * Format relative time (e.g., "2 hours ago", "yesterday")
-	 */
-	const formatRelativeTime = (timestamp: number): string => {
-		const now = Date.now()
-		const diff = now - timestamp
-		const minutes = Math.floor(diff / 60000)
-		const hours = Math.floor(diff / 3600000)
-		const days = Math.floor(diff / 86400000)
-
-		if (minutes < 1) return "just now"
-		if (minutes < 60) return `${minutes}m ago`
-		if (hours < 24) return `${hours}h ago`
-		if (days === 1) return "yesterday"
-		if (days < 7) return `${days}d ago`
-		return new Date(timestamp).toLocaleDateString()
-	}
-
-	/**
 	 * Subscribe to store updates for all directories
-	 *
-	 * Converts store Session objects to SessionDisplay format.
-	 * Updates when sessions array changes for any tracked directory.
 	 */
 	useEffect(() => {
 		const directorySet = new Set(directories)
 
-		const unsubscribe = useOpencodeStore.subscribe((state) => {
+		const extractSessions = (
+			state: ReturnType<typeof useOpencodeStore.getState>,
+		): Record<string, SessionDisplay[]> => {
 			const newSessions: Record<string, SessionDisplay[]> = {}
 
 			for (const directory of directorySet) {
 				const dirState = state.directories[directory]
-				if (!dirState) continue
 
-				// Convert store sessions to SessionDisplay format
+				// Initialize empty array for directory even if not in store yet
+				// This ensures the component always has a consistent shape to work with
+				if (!dirState) {
+					console.log(
+						"[useMultiDirectorySessions] Directory not in store yet (will auto-init on first SSE event):",
+						directory,
+					)
+					newSessions[directory] = []
+					continue
+				}
+
 				const storeSessions: SessionDisplay[] = dirState.sessions.map((session) => ({
 					id: session.id,
 					title: session.title || "Untitled Session",
@@ -84,12 +74,42 @@ export function useMultiDirectorySessions(directories: string[]): Record<string,
 				}))
 
 				newSessions[directory] = storeSessions
+
+				console.log(
+					"[useMultiDirectorySessions] Extracted sessions for",
+					directory,
+					":",
+					storeSessions.length,
+				)
 			}
 
-			setLiveSessions(newSessions)
+			return newSessions
+		}
+
+		// Read initial state
+		const initialSessions = extractSessions(useOpencodeStore.getState())
+		console.log("[useMultiDirectorySessions] Initial state:", Object.keys(initialSessions))
+		setLiveSessions(initialSessions)
+
+		// Subscribe to future updates
+		const unsubscribe = useOpencodeStore.subscribe((state) => {
+			const updated = extractSessions(state)
+			console.log(
+				"[useMultiDirectorySessions] Store updated, re-extracting sessions:",
+				Object.keys(updated),
+			)
+			setLiveSessions(updated)
 		})
 
-		return unsubscribe
+		console.log(
+			"[useMultiDirectorySessions] Subscribed to store for directories:",
+			Array.from(directorySet),
+		)
+
+		return () => {
+			console.log("[useMultiDirectorySessions] Unsubscribing from store")
+			unsubscribe()
+		}
 	}, [directories])
 
 	return liveSessions

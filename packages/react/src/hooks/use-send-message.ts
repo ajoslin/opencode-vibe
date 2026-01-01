@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react"
 import type { Prompt, SlashCommand } from "../types/prompt"
-import { convertToApiParts } from "../lib/prompt-api"
+import { prompt } from "@opencode-vibe/core/api"
 import { useCommands } from "./use-commands"
 import { sessions } from "@opencode-vibe/core/api"
 import { useSessionStatus } from "./internal/use-session-status"
@@ -174,7 +174,7 @@ export function useSendMessage({
 			}
 
 			// Regular prompt - convert and send via session.promptAsync
-			const apiParts = convertToApiParts(parts, directory || "")
+			const apiParts = prompt.convertToApiParts(parts, directory || "")
 
 			await sessions.promptAsync(sessionId, apiParts, model, directory)
 			return true

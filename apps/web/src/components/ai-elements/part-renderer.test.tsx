@@ -173,3 +173,227 @@ describe("PartRenderer", () => {
 		expect(toolDiv?.textContent).toContain("Failed to write file")
 	})
 })
+
+describe("PartRenderer.memo", () => {
+	it("detects metadata.summary length changes for task tools", () => {
+		const part1: Part = {
+			id: "task-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "task",
+			state: {
+				status: "running",
+				metadata: {
+					summary: [
+						{
+							id: "tool-1",
+							state: { status: "running" },
+						},
+					],
+				},
+			},
+		}
+
+		const part2: Part = {
+			id: "task-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "task",
+			state: {
+				status: "running",
+				metadata: {
+					summary: [
+						{
+							id: "tool-1",
+							state: { status: "running" },
+						},
+						{
+							id: "tool-2",
+							state: { status: "running" },
+						},
+					],
+				},
+			},
+		}
+
+		// Memo should return false (should re-render) when summary length changes
+		const memoCompare = (PartRenderer as any).compare
+		const shouldSkipRender = memoCompare({ part: part1 }, { part: part2 })
+
+		expect(shouldSkipRender).toBe(false)
+	})
+
+	it("detects metadata.summary last item status changes for task tools", () => {
+		const part1: Part = {
+			id: "task-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "task",
+			state: {
+				status: "running",
+				metadata: {
+					summary: [
+						{
+							id: "tool-1",
+							state: { status: "running" },
+						},
+						{
+							id: "tool-2",
+							state: { status: "running" },
+						},
+					],
+				},
+			},
+		}
+
+		const part2: Part = {
+			id: "task-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "task",
+			state: {
+				status: "running",
+				metadata: {
+					summary: [
+						{
+							id: "tool-1",
+							state: { status: "running" },
+						},
+						{
+							id: "tool-2",
+							state: { status: "completed" },
+						},
+					],
+				},
+			},
+		}
+
+		// Memo should return false (should re-render) when last item status changes
+		const memoCompare = (PartRenderer as any).compare
+		const shouldSkipRender = memoCompare({ part: part1 }, { part: part2 })
+
+		expect(shouldSkipRender).toBe(false)
+	})
+
+	it("skips re-render when task tool metadata.summary is identical", () => {
+		const part1: Part = {
+			id: "task-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "task",
+			state: {
+				status: "running",
+				metadata: {
+					summary: [
+						{
+							id: "tool-1",
+							state: { status: "completed" },
+						},
+						{
+							id: "tool-2",
+							state: { status: "running" },
+						},
+					],
+				},
+			},
+		}
+
+		const part2: Part = {
+			id: "task-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "task",
+			state: {
+				status: "running",
+				metadata: {
+					summary: [
+						{
+							id: "tool-1",
+							state: { status: "completed" },
+						},
+						{
+							id: "tool-2",
+							state: { status: "running" },
+						},
+					],
+				},
+			},
+		}
+
+		// Memo should return true (skip re-render) when metadata.summary is identical
+		const memoCompare = (PartRenderer as any).compare
+		const shouldSkipRender = memoCompare({ part: part1 }, { part: part2 })
+
+		expect(shouldSkipRender).toBe(true)
+	})
+
+	it("skips re-render for non-task tool parts with identical state", () => {
+		const part1: Part = {
+			id: "read-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "read",
+			state: {
+				status: "completed",
+				title: "Read file",
+			},
+		}
+
+		const part2: Part = {
+			id: "read-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "read",
+			state: {
+				status: "completed",
+				title: "Read file",
+			},
+		}
+
+		// Memo should return true (skip re-render) for non-task tools with identical state
+		const memoCompare = (PartRenderer as any).compare
+		const shouldSkipRender = memoCompare({ part: part1 }, { part: part2 })
+
+		expect(shouldSkipRender).toBe(true)
+	})
+
+	it("detects status changes for non-task tools", () => {
+		const part1: Part = {
+			id: "read-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "read",
+			state: {
+				status: "running",
+				title: "Read file",
+			},
+		}
+
+		const part2: Part = {
+			id: "read-part-1",
+			messageID: "msg-1",
+			type: "tool",
+			content: "",
+			tool: "read",
+			state: {
+				status: "completed",
+				title: "Read file",
+			},
+		}
+
+		// Memo should return false (should re-render) when status changes
+		const memoCompare = (PartRenderer as any).compare
+		const shouldSkipRender = memoCompare({ part: part1 }, { part: part2 })
+
+		expect(shouldSkipRender).toBe(false)
+	})
+})

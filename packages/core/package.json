@@ -38,6 +38,14 @@
 		"./types": {
 			"types": "./dist/types/index.d.ts",
 			"import": "./dist/types/index.js"
+		},
+		"./runtime": {
+			"types": "./dist/runtime/index.d.ts",
+			"import": "./dist/runtime/index.js"
+		},
+		"./world": {
+			"types": "./dist/world/index.d.ts",
+			"import": "./dist/world/index.js"
 		}
 	},
 	"files": [
@@ -58,12 +66,17 @@
 		"@opencode-ai/sdk": "^1.0.209"
 	},
 	"devDependencies": {
+		"@effect/experimental": "^0.58.0",
+		"@effect/platform": "^0.94.1",
+		"@effect/rpc": "^0.73.0",
 		"@opencode-ai/sdk": "^1.0.209",
 		"@types/bun": "latest",
 		"typescript": "^5"
 	},
 	"dependencies": {
-		"effect": "^3.19.0",
+		"@effect-atom/atom": "^0.4.11",
+		"@libsql/client": "^0.15.15",
+		"effect": "3.19.14",
 		"eventsource-parser": "^3.0.6"
 	}
 }

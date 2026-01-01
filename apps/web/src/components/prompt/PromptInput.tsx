@@ -61,7 +61,6 @@ export interface PromptInputProps {
  * Main prompt input component with autocomplete
  */
 export function PromptInput({
-	sessionId,
 	onSubmit,
 	placeholder,
 	disabled,

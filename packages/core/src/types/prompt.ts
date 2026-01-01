@@ -41,3 +41,29 @@ export interface SlashCommand {
 	keybind?: string
 	type: "builtin" | "custom"
 }
+
+/**
+ * API part types - format expected by OpenCode server
+ */
+
+export interface ApiTextPart {
+	type: "text"
+	text: string
+	id: string
+}
+
+export interface ApiFilePart {
+	type: "file"
+	mime: string
+	url: string
+	filename: string
+}
+
+export interface ApiImagePart {
+	type: "image"
+	mime: string
+	url: string
+	filename: string
+}
+
+export type ApiPart = ApiTextPart | ApiFilePart | ApiImagePart

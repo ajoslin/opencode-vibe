@@ -208,17 +208,25 @@ export const Tool = React.memo(ToolComponent, (prev, next) => {
 
 		// Task tools: Compare metadata.summary for sub-agent activity updates
 		if (prev.toolPart.tool === "task" && next.toolPart.tool === "task") {
-			// Skip pending states (no metadata yet)
-			if (prev.toolPart.state.status === "pending" || next.toolPart.state.status === "pending") {
+			// Only skip comparison if BOTH are pending (no metadata yet)
+			// If one is pending and one isn't, we need to re-render for the status change
+			if (prev.toolPart.state.status === "pending" && next.toolPart.state.status === "pending") {
 				return true
 			}
 
-			const prevMetadata = prev.toolPart.state.metadata as
-				| { summary?: Array<{ id: string; state: { status: string } }> }
-				| undefined
-			const nextMetadata = next.toolPart.state.metadata as
-				| { summary?: Array<{ id: string; state: { status: string } }> }
-				| undefined
+			// Extract metadata safely - only non-pending states have metadata
+			const prevMetadata =
+				prev.toolPart.state.status !== "pending"
+					? (prev.toolPart.state.metadata as
+							| { summary?: Array<{ id: string; state: { status: string } }> }
+							| undefined)
+					: undefined
+			const nextMetadata =
+				next.toolPart.state.status !== "pending"
+					? (next.toolPart.state.metadata as
+							| { summary?: Array<{ id: string; state: { status: string } }> }
+							| undefined)
+					: undefined
 
 			const prevSummary = prevMetadata?.summary
 			const nextSummary = nextMetadata?.summary
@@ -293,10 +301,10 @@ type ToolCardProps = ComponentProps<typeof Collapsible> & {
  * Task tool card with subagent view integration.
  * Uses useSubagent hook to get child session data and renders SubagentView when expanded.
  */
-const TaskToolCard = ({ toolPart, className, ...props }: ToolCardProps) => {
+const TaskToolCard = ({ toolPart, className }: ToolCardProps) => {
 	const { state } = toolPart
 	const { primary } = getToolContextLines(toolPart)
-	const { subagent, isExpanded, toggleExpanded, hasSubagent, isRunning } = useSubagent({
+	const { subagent, isExpanded, toggleExpanded, hasSubagent } = useSubagent({
 		partId: toolPart.id,
 	})
 
@@ -521,6 +529,9 @@ const ToolCardComponent = ({ toolPart, className, ...props }: ToolCardProps) => 
  *
  * Solution: Deep compare actual content (id, status, summary) instead
  * of reference equality to prevent unnecessary Framer Motion re-animations.
+ *
+ * Pattern mirrors Tool component (lines 200-260): Compare metadata.summary
+ * length and last item status for task tools, NOT reference equality.
  */
 const ToolCard = React.memo(ToolCardComponent, (prev, next) => {
 	// Compare actual content, not Immer references
@@ -528,13 +539,48 @@ const ToolCard = React.memo(ToolCardComponent, (prev, next) => {
 	if (prev.toolPart.state.status !== next.toolPart.state.status) return false
 	if (prev.className !== next.className) return false
 
-	// Safe to access metadata only when not pending
-	if (prev.toolPart.state.status !== "pending" && next.toolPart.state.status !== "pending") {
-		const prevSummary = (prev.toolPart.state as any).metadata?.summary
-		const nextSummary = (next.toolPart.state as any).metadata?.summary
-		if (prevSummary !== nextSummary) return false
+	// Task tools: Compare metadata.summary for sub-agent activity updates
+	if (prev.toolPart.tool === "task" && next.toolPart.tool === "task") {
+		// Only skip comparison if BOTH are pending (no metadata yet)
+		if (prev.toolPart.state.status === "pending" && next.toolPart.state.status === "pending") {
+			return true
+		}
+
+		// Extract metadata safely - only non-pending states have metadata
+		const prevMetadata =
+			prev.toolPart.state.status !== "pending"
+				? (prev.toolPart.state.metadata as
+						| { summary?: Array<{ id: string; state: { status: string } }> }
+						| undefined)
+				: undefined
+		const nextMetadata =
+			next.toolPart.state.status !== "pending"
+				? (next.toolPart.state.metadata as
+						| { summary?: Array<{ id: string; state: { status: string } }> }
+						| undefined)
+				: undefined
+
+		const prevSummary = prevMetadata?.summary
+		const nextSummary = nextMetadata?.summary
+
+		// Both undefined/null - equal
+		if (!prevSummary && !nextSummary) return true
+
+		// One undefined, one defined - not equal
+		if (!prevSummary || !nextSummary) return false
+
+		// Different lengths - not equal
+		if (prevSummary.length !== nextSummary.length) return false
+
+		// Compare summary item count and last item status (common case)
+		// Full deep comparison is handled by SubagentCurrentActivity's memo
+		const prevLast = prevSummary[prevSummary.length - 1]
+		const nextLast = nextSummary[nextSummary.length - 1]
+
+		return prevLast?.id === nextLast?.id && prevLast?.state.status === nextLast?.state.status
 	}
 
+	// Non-task tools: id + status comparison is sufficient
 	return true
 })
 

@@ -15,3 +15,9 @@ export {
 	detectAtTrigger,
 	detectSlashTrigger,
 } from "./prompt-parsing.js"
+export {
+	formatRelativeTime,
+	formatTokens,
+	formatNumber,
+	type FormatNumberOptions,
+} from "./format.js"

@@ -118,7 +118,7 @@ export const SubagentView = React.memo(SubagentViewInternal, (prevProps, nextPro
 
 		if (prevParts.length !== nextParts.length) return false
 
-		// Compare part IDs and types
+		// Compare part IDs, types, content, and state
 		for (let i = 0; i < prevParts.length; i++) {
 			const prevPart = prevParts[i]
 			const nextPart = nextParts[i]
@@ -126,6 +126,44 @@ export const SubagentView = React.memo(SubagentViewInternal, (prevProps, nextPro
 			if (prevPart.id !== nextPart.id) return false
 			if (prevPart.type !== nextPart.type) return false
 			if (prevPart.content !== nextPart.content) return false
+
+			// For tool parts, compare state to detect updates
+			if (prevPart.type === "tool" && nextPart.type === "tool") {
+				// Compare state.status (all tools have this)
+				if (prevPart.state?.status !== nextPart.state?.status) return false
+
+				// Task tools: Compare metadata.summary for sub-agent activity updates
+				if (prevPart.tool === "task" && nextPart.tool === "task") {
+					// Extract metadata safely - check if state exists
+					const prevMetadata = prevPart.state?.metadata as
+						| { summary?: Array<{ id: string; state: { status: string } }> }
+						| undefined
+					const nextMetadata = nextPart.state?.metadata as
+						| { summary?: Array<{ id: string; state: { status: string } }> }
+						| undefined
+
+					const prevSummary = prevMetadata?.summary
+					const nextSummary = nextMetadata?.summary
+
+					// Both undefined/null - equal
+					if (!prevSummary && !nextSummary) continue
+
+					// One undefined, one defined - not equal
+					if (!prevSummary || !nextSummary) return false
+
+					// Different lengths - not equal
+					if (prevSummary.length !== nextSummary.length) return false
+
+					// Compare last item status (common case - new items or status change)
+					// Full deep comparison handled by SubagentCurrentActivity's own memo
+					const prevLast = prevSummary[prevSummary.length - 1]
+					const nextLast = nextSummary[nextSummary.length - 1]
+
+					if (prevLast?.id !== nextLast?.id || prevLast?.state.status !== nextLast?.state.status) {
+						return false
+					}
+				}
+			}
 		}
 	}
 

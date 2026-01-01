@@ -485,4 +485,71 @@ describe("usePromptStore", () => {
 			})
 		})
 	})
+
+	describe("selector stability patterns", () => {
+		test("whole-store pattern creates stable reference via getState()", () => {
+			// This pattern is CORRECT for stores
+			// getState() always returns the same reference until state changes
+			const state1 = usePromptStore.getState()
+			const state2 = usePromptStore.getState()
+
+			// Same reference if no state changes
+			expect(state1).toBe(state2)
+
+			// Actions are also stable references
+			expect(state1.setParts).toBe(state2.setParts)
+			expect(state1.reset).toBe(state2.reset)
+		})
+
+		test("store actions can be used in effects without dependency warnings", () => {
+			// This pattern is CORRECT for calling actions in effects
+			// Actions are stable - won't cause infinite loops
+			const callCount = { value: 0 }
+			const mockEffect = () => {
+				callCount.value++
+				// Safe to call in effect - getState() actions are stable
+				const actions = usePromptStore.getState()
+				actions.setParts([{ type: "text", content: "test", start: 0, end: 4 }])
+			}
+
+			mockEffect()
+			mockEffect()
+
+			// Called twice, but actions didn't change
+			expect(callCount.value).toBe(2)
+			const firstPart = usePromptStore.getState().parts[0]
+			expect(firstPart?.type).toBe("text")
+			if (firstPart?.type === "text") {
+				expect(firstPart.content).toBe("test")
+			}
+		})
+
+		test("whole-store destructuring pattern is safe when component needs all state", () => {
+			// This pattern is used in PromptInput.tsx - CORRECT for this use case
+			// Component re-renders on ANY state change (needs parts, cursor, autocomplete)
+
+			const initialState = usePromptStore.getState()
+			const { parts: parts1, cursor: cursor1, autocomplete: autocomplete1, setParts } = initialState
+
+			// Update state
+			setParts([{ type: "text", content: "changed", start: 0, end: 7 }])
+
+			const newState = usePromptStore.getState()
+			const { parts: parts2, cursor: cursor2, autocomplete: autocomplete2 } = newState
+
+			// Parts changed (new reference)
+			expect(parts1).not.toBe(parts2)
+			const newPart = parts2[0]
+			expect(newPart?.type).toBe("text")
+			if (newPart?.type === "text") {
+				expect(newPart.content).toBe("changed")
+			}
+
+			// Cursor unchanged (same value)
+			expect(cursor1).toBe(cursor2)
+
+			// Autocomplete unchanged (same reference)
+			expect(autocomplete1).toBe(autocomplete2)
+		})
+	})
 })

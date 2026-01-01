@@ -13,7 +13,6 @@ import type {
 	FilePart,
 	ToolPart,
 	ToolState,
-	StepStartPart,
 } from "@opencode-ai/sdk/client"
 import type { UIMessage } from "ai"
 

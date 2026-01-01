@@ -20,6 +20,7 @@
 
 "use client"
 
+import { formatTokens } from "@opencode-vibe/core/utils"
 import type { ContextUsage } from "../../store/types"
 import { useOpencodeStore } from "../../store"
 import { useOpencode } from "../../providers"
@@ -53,14 +54,5 @@ export function useContextUsage(sessionId: string): ContextUsage {
 	)
 }
 
-/**
- * Format token count with K/M suffix
- *
- * @param n - Token count
- * @returns Formatted string (e.g., "1.5K", "2.3M")
- */
-export function formatTokens(n: number): string {
-	if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
-	return n.toString()
-}
+// Re-export formatTokens from Core for backwards compatibility
+export { formatTokens }

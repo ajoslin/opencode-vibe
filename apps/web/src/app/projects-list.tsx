@@ -85,16 +85,22 @@ const SessionRow = memo(
 		session,
 		directory,
 		status,
+		lastActivityTime,
 	}: {
 		session: SessionDisplay
 		directory: string
 		status?: SessionStatusValue
+		/** Last activity timestamp - used for relative time display and memo comparison */
+		lastActivityTime?: number
 	}) {
 		// Trigger re-render every 60 seconds for live time updates
 		useLiveTime()
 
+		// Use lastActivityTime if available (from SSE), otherwise fall back to session.timestamp
+		const displayTimestamp = lastActivityTime ?? session.timestamp
+
 		// Format time client-side for live updates
-		const relativeTime = formatRelativeTime(session.timestamp)
+		const relativeTime = formatRelativeTime(displayTimestamp)
 
 		return (
 			<Link
@@ -118,11 +124,14 @@ const SessionRow = memo(
 		)
 	},
 	(prev, next) => {
-		// Only re-render if session ID, directory, or status changes
+		// Re-render if session ID, directory, status, or lastActivityTime changes
+		// Note: tick from useLiveTime triggers re-render via React's normal mechanism
+		// since it's internal state, not a prop - memo doesn't block it
 		return (
 			prev.session.id === next.session.id &&
 			prev.directory === next.directory &&
-			prev.status === next.status
+			prev.status === next.status &&
+			prev.lastActivityTime === next.lastActivityTime
 		)
 	},
 )
@@ -191,6 +200,7 @@ function SortedSessionsList({
 						session={session}
 						directory={directory}
 						status={sessionStatuses[session.id]}
+						lastActivityTime={lastActivity[session.id]}
 					/>
 				</motion.li>
 			))}
@@ -319,18 +329,31 @@ export function ProjectsList({ initialProjects }: ProjectsListProps) {
 		<div className="space-y-8">
 			<SSEStatus />
 			{initialProjects.map(({ project, sessions, name }) => {
-				// Merge live sessions from store with initial sessions
-				// Use live sessions if available, otherwise fall back to initial
-				const displaySessions = liveSessions[project.worktree] ?? sessions
+				// Get live sessions from store (may include new sessions from SSE)
+				const liveSessionsForDir = liveSessions[project.worktree]
 
-				// Deduplicate by session ID (prefer live sessions over initial)
+				// Debug: Log when live sessions change
+				if (liveSessionsForDir && liveSessionsForDir.length > 0) {
+					console.log("[ProjectsList] Live sessions for", name, ":", liveSessionsForDir.length)
+				}
+
+				// Deduplicate by session ID - merge initial + live sessions
+				// This ensures new sessions from SSE appear alongside server-rendered sessions
 				const sessionMap = new Map<string, SessionDisplay>()
+
+				// Add initial sessions first (from server render)
 				for (const session of sessions) {
 					sessionMap.set(session.id, session)
 				}
-				for (const session of displaySessions) {
-					sessionMap.set(session.id, session)
+
+				// Add/override with live sessions (from SSE/store)
+				// New sessions will be added, existing sessions will be updated
+				if (liveSessionsForDir) {
+					for (const session of liveSessionsForDir) {
+						sessionMap.set(session.id, session)
+					}
 				}
+
 				const mergedSessions = Array.from(sessionMap.values())
 
 				return (

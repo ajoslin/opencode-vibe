@@ -471,6 +471,66 @@ describe("SubagentCurrentActivity", () => {
 
 		expect(renderCount).toBe(initialRenderCount + 1) // Should re-render
 	})
+
+	it("re-renders when completed tool title is added via SSE (Immer scenario)", () => {
+		// BUG REPRODUCTION: Memo comparison missing item.state.title
+		// When SSE updates add title to completed tool, component should re-render
+		// to display the new title instead of showing stale content
+
+		const part1 = {
+			id: "task-123",
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: { status: "completed" as const }, // No title yet
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container, rerender } = render(<SubagentCurrentActivity part={part1} />)
+		const initialContent = container.textContent
+
+		// SSE update: title added (Immer creates new references)
+		const part2 = {
+			id: "task-123",
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: {
+								status: "completed" as const,
+								title: "Read src/auth.ts (234 lines)", // Title added
+							},
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		rerender(<SubagentCurrentActivity part={part2} />)
+
+		// Component SHOULD re-render and show the new title
+		expect(container.textContent).toContain("Read src/auth.ts (234 lines)")
+		expect(container.textContent).not.toBe(initialContent)
+
+		// Verify different references (Immer behavior)
+		expect((part1.state as any).metadata.summary).not.toBe((part2.state as any).metadata.summary)
+	})
 })
 
 describe("SubagentToolTree", () => {
@@ -697,5 +757,65 @@ describe("SubagentToolTree", () => {
 		// Should have tree-like structure (using ├ or └ for branches)
 		const text = container.textContent || ""
 		expect(text.includes("├") || text.includes("└")).toBe(true)
+	})
+
+	it("re-renders when tool title is added via SSE (Immer scenario)", () => {
+		// Verifies memo comparison includes item.state.title
+		// When SSE updates add titles to tools, tree should update to show them
+
+		const part1 = {
+			id: "task-123",
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: { status: "completed" as const }, // No title yet
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		const { container, rerender } = render(<SubagentToolTree part={part1} defaultOpen={true} />)
+
+		// Initial render shows tool name
+		expect(container.textContent).toContain("read")
+
+		// SSE update: title added (Immer creates new references)
+		const part2 = {
+			id: "task-123",
+			type: "tool",
+			tool: "task",
+			state: {
+				status: "running" as const,
+				metadata: {
+					sessionId: "sess-123",
+					summary: [
+						{
+							id: "part-1",
+							tool: "read",
+							state: {
+								status: "completed" as const,
+								title: "Read apps/web/src/task.tsx",
+							},
+						},
+					],
+				},
+			},
+		} as unknown as ToolPart
+
+		rerender(<SubagentToolTree part={part2} />)
+
+		// Tree SHOULD re-render and show the new title
+		expect(container.textContent).toContain("Read apps/web/src/task.tsx")
+
+		// Verify different references (Immer behavior)
+		expect((part1.state as any).metadata.summary).not.toBe((part2.state as any).metadata.summary)
 	})
 })

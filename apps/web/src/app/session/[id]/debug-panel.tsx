@@ -283,9 +283,6 @@ export function DebugPanel({ sessionId, isOpen }: DebugPanelProps) {
 	// Early return AFTER all hooks
 	if (!isOpen) return null
 
-	// Computed values for render
-	const matchingServer = servers.find((s) => s.directory === directory)
-
 	return (
 		<div className="fixed bottom-20 right-4 z-50 bg-black/90 text-green-400 font-mono text-xs p-3 rounded-lg max-w-md max-h-[500px] overflow-auto border border-green-500/50">
 			<div className="flex items-center justify-between mb-2">

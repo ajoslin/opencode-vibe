@@ -55,8 +55,11 @@ export const Conversation = ({ className, children, ...props }: ConversationProp
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const [isAtBottom, setIsAtBottom] = useState(true)
 	const [isSticking, setIsSticking] = useState(true)
-	const isUserScrolling = useRef(false)
 	const lastScrollTop = useRef(0)
+
+	// Use ref pattern for isSticking to avoid recreating handleScroll on every change
+	const isStickingRef = useRef(isSticking)
+	isStickingRef.current = isSticking
 
 	// Smooth scroll - for manual button clicks
 	const scrollToBottom = useCallback(() => {
@@ -77,6 +80,7 @@ export const Conversation = ({ className, children, ...props }: ConversationProp
 	}, [])
 
 	// Handle scroll events to detect user scrolling up
+	// Use ref for isSticking to avoid recreating this callback on every isSticking change
 	const handleScroll = useCallback(() => {
 		const el = scrollRef.current
 		if (!el) return
@@ -92,12 +96,12 @@ export const Conversation = ({ className, children, ...props }: ConversationProp
 		}
 
 		// If user scrolled to bottom manually, re-enable sticking
-		if (atBottom && !isSticking) {
+		if (atBottom && !isStickingRef.current) {
 			setIsSticking(true)
 		}
 
 		lastScrollTop.current = scrollTop
-	}, [isSticking])
+	}, [])
 
 	// Initial scroll to bottom - use layoutEffect to run before paint
 	// Use instant scroll to avoid animation on page load
@@ -142,7 +146,7 @@ export const ConversationContent = ({
 	children,
 	...props
 }: ConversationContentProps) => {
-	const { scrollRef, isSticking, scrollToBottomInstant } = useScrollContext()
+	const { isSticking, scrollToBottomInstant } = useScrollContext()
 	const contentRef = useRef<HTMLDivElement>(null)
 
 	// Use ref to avoid recreating ResizeObserver on isSticking change

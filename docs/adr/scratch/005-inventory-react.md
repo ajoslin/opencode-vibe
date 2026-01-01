@@ -3,6 +3,10 @@
 **Research Date:** 2025-12-29  
 **Purpose:** Comprehensive audit of React layer to inform ADR 005 - @joelhooks/swarmtools-react package extraction
 
+> **Historical Note (2026-01-01)**: This inventory describes the Zustand-based architecture.
+> The store was removed in commit 8e40992. References to `useDeferredValue` are outdated.
+> Current implementation uses jotai atoms with direct Core API calls.
+
 ---
 
 ## Executive Summary

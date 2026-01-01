@@ -37,7 +37,7 @@ export interface ModelSelectorProps {
  * />
  * ```
  */
-export function ModelSelector({ value, onValueChange, directory }: ModelSelectorProps) {
+export function ModelSelector({ value, onValueChange }: ModelSelectorProps) {
 	const { providers, loading: isLoading, error } = useProviders()
 
 	// Create a flat list of provider+model combinations for the select

@@ -622,3 +622,336 @@ describe("MultiServerSSE reconnection behavior", () => {
 		sse.stop()
 	})
 })
+
+/**
+ * Session event handling tests - verify session.created/updated/status events
+ * are properly logged and emitted with correct directory path
+ */
+describe("MultiServerSSE session event handling", () => {
+	beforeEach(() => {
+		vi.useFakeTimers()
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+		vi.restoreAllMocks()
+	})
+
+	it("should emit session.created events with directory path", async () => {
+		const sse = new MultiServerSSE()
+		const eventCallback = vi.fn()
+
+		// Create a mock stream that sends a session.created event
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "/test/project",
+					payload: {
+						type: "session.created",
+						properties: {
+							sessionID: "ses_new123",
+							session: { id: "ses_new123", directory: "/test/project" },
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test/project" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.onEvent(eventCallback)
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify session.created event was emitted with correct directory
+		expect(eventCallback).toHaveBeenCalledWith(
+			expect.objectContaining({
+				directory: "/test/project",
+				payload: expect.objectContaining({
+					type: "session.created",
+					properties: expect.objectContaining({
+						sessionID: "ses_new123",
+					}),
+				}),
+			}),
+		)
+
+		sse.stop()
+	})
+
+	it("should emit session.updated events with directory path", async () => {
+		const sse = new MultiServerSSE()
+		const eventCallback = vi.fn()
+
+		// Create a mock stream that sends a session.updated event
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "/test/project",
+					payload: {
+						type: "session.updated",
+						properties: {
+							sessionID: "ses_existing",
+							session: { id: "ses_existing", directory: "/test/project", title: "Updated Title" },
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test/project" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.onEvent(eventCallback)
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify session.updated event was emitted with correct directory
+		expect(eventCallback).toHaveBeenCalledWith(
+			expect.objectContaining({
+				directory: "/test/project",
+				payload: expect.objectContaining({
+					type: "session.updated",
+					properties: expect.objectContaining({
+						sessionID: "ses_existing",
+					}),
+				}),
+			}),
+		)
+
+		sse.stop()
+	})
+
+	it("should emit session.status events with directory path", async () => {
+		const sse = new MultiServerSSE()
+		const eventCallback = vi.fn()
+		const statusCallback = vi.fn()
+
+		// Create a mock stream that sends a session.status event
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "/test/project",
+					payload: {
+						type: "session.status",
+						properties: {
+							sessionID: "ses_123",
+							status: { type: "running" },
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test/project" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.onEvent(eventCallback)
+		sse.onStatus(statusCallback)
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify session.status event was emitted to both callbacks
+		expect(eventCallback).toHaveBeenCalledWith(
+			expect.objectContaining({
+				directory: "/test/project",
+				payload: expect.objectContaining({
+					type: "session.status",
+					properties: expect.objectContaining({
+						sessionID: "ses_123",
+						status: { type: "running" },
+					}),
+				}),
+			}),
+		)
+
+		expect(statusCallback).toHaveBeenCalledWith(
+			expect.objectContaining({
+				directory: "/test/project",
+				sessionID: "ses_123",
+				status: { type: "running" },
+			}),
+		)
+
+		sse.stop()
+	})
+
+	it("should track sessionToPort mapping from session.created events", async () => {
+		const sse = new MultiServerSSE()
+
+		// Create a mock stream that sends a session.created event
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "/test/project",
+					payload: {
+						type: "session.created",
+						properties: {
+							sessionID: "ses_dynamic",
+							session: { id: "ses_dynamic" },
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test/project" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify sessionToPort mapping was updated
+		expect(sse.getPortForSession("ses_dynamic")).toBe(3000)
+		expect(sse.getBaseUrlForSession("ses_dynamic", "/test/project")).toBe("/api/opencode/3000")
+
+		sse.stop()
+	})
+
+	it("should track sessionToPort mapping from session.updated events", async () => {
+		const sse = new MultiServerSSE()
+
+		// Create a mock stream that sends a session.updated event
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "/test/project",
+					payload: {
+						type: "session.updated",
+						properties: {
+							sessionID: "ses_updated",
+							session: { id: "ses_updated" },
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test/project" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify sessionToPort mapping was updated
+		expect(sse.getPortForSession("ses_updated")).toBe(3000)
+		expect(sse.getBaseUrlForSession("ses_updated", "/test/project")).toBe("/api/opencode/3000")
+
+		sse.stop()
+	})
+
+	it("should handle nested sessionID in properties.session.id", async () => {
+		const sse = new MultiServerSSE()
+
+		// Create a mock stream with sessionID nested in properties.session
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "/test/project",
+					payload: {
+						type: "session.created",
+						properties: {
+							session: { id: "ses_nested" },
+							// Note: No top-level sessionID
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test/project" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify it didn't crash and mapping still works if sessionID was extracted
+		// The current implementation checks props.info.sessionID and props.part.sessionID
+		// but NOT props.session.id - this test documents that gap
+		expect(sse.getPortForSession("ses_nested")).toBeUndefined()
+
+		sse.stop()
+	})
+
+	it("should not emit events for global directory", async () => {
+		const sse = new MultiServerSSE()
+		const eventCallback = vi.fn()
+
+		// Create a mock stream that sends a global event (should be filtered)
+		const mockStream = new ReadableStream({
+			start(controller) {
+				const event = {
+					directory: "global",
+					payload: {
+						type: "session.created",
+						properties: {
+							sessionID: "ses_global",
+						},
+					},
+				}
+				controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+			},
+		})
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "/api/opencode/servers") {
+				return new Response(JSON.stringify([{ port: 3000, pid: 123, directory: "/test" }]))
+			}
+			return new Response(mockStream, {
+				headers: { "Content-Type": "text/event-stream" },
+			})
+		})
+
+		sse.onEvent(eventCallback)
+		sse.start()
+		await vi.advanceTimersByTimeAsync(100)
+
+		// Verify global events are filtered out
+		expect(eventCallback).not.toHaveBeenCalled()
+
+		sse.stop()
+	})
+})
