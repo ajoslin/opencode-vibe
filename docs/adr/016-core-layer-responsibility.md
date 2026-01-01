@@ -1,9 +1,10 @@
 # ADR-016: Core Layer Responsibility Model
 
-**Status:** Proposed  
-**Date:** 2026-01-01  
+**Status:** Amended  
+**Date:** 2025-12-30  
+**Amended:** 2026-01-01  
 **Deciders:** Joel Hooks, ADR-Architect Agent  
-**Related:** [ADR-015](015-event-architecture-simplification.md), [CORE_LAYER_GAPS_AUDIT.md](../CORE_LAYER_GAPS_AUDIT.md)
+**Related:** [ADR-015](015-event-architecture-simplification.md), [CORE_LAYER_GAPS_AUDIT.md](../CORE_LAYER_GAPS_AUDIT.md), [ADR-016-PHASE-0-REVIEW-FINDINGS.md](../ADR-016-PHASE-0-REVIEW-FINDINGS.md)
 
 ```
     ╔═════════════════════════════════════════════════╗
@@ -441,6 +442,11 @@ export function useSessionStatus(sessionId: string): SessionStatus {
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
+| **Effect runtime doesn't exist yet** | **Certain** | **High** | **Phase 0: Build runtime foundation first** |
+| **Gap 8 already solved by backend** | Medium | Medium | Phase 1.5: Verify SSE event format before building Core API |
+| **Backend changes block Phases 2-4** | High | High | Phase 1.5: Get backend commitment early, build Core as fallback |
+| **Effect testing too complex** | Medium | Medium | Document testing patterns with examples, pair programming |
+| **Rollback happens mid-migration** | Low | High | Explicit rollback triggers per phase, feature flags for dual implementation |
 | Core API design wrong | Medium | Medium | Iterate in Phase 1 (Priority 1 gaps only), get feedback before expanding |
 | Effect too complex | Low | Medium | runWithRuntime isolates React from Effect, only Core devs need Effect knowledge |
 | Performance regression | Low | High | Measure in Phase 1, rollback if slower than client-side computation |
@@ -448,6 +454,53 @@ export function useSessionStatus(sessionId: string): SessionStatus {
 | Backend changes required | Medium | Medium | Some gaps (bootstrap, context usage) may need backend support - phase accordingly |
 
 ## Implementation Plan
+
+### Phase 0: Effect Runtime Foundation (PREREQUISITE)
+
+**Goal:** Establish runWithRuntime pattern and service DI infrastructure.
+
+**Duration:** 2-3 days
+
+**Why First:** Phases 1-4 assume this infrastructure exists. It doesn't. Build it first.
+
+**Tasks:**
+
+1. ✅ Create `packages/core/src/runtime/app-layer.ts`
+   - Layer composition pattern (`Layer.mergeAll`)
+   - ConfigService (sync factory, simplest pattern)
+   - Tests for layer construction
+
+2. ✅ Create `packages/core/src/runtime/run-with-runtime.ts`
+   - Promise boundary wrapper: `<A, E>(effect: Effect<A, E>) => Promise<A>`
+   - Error handling (Effect errors → Promise rejection)
+   - Type signature validation
+
+3. ✅ Document service factory patterns for team
+   - When to use `sync` vs `scoped` vs `effect`
+   - Examples: ConfigService (sync), SSEService (scoped), DatabaseService (effect)
+   - Reference: Hivemind `mem-5bef20787787b69d`
+
+4. ✅ Spike: Prove pattern with trivial service
+   - Create HealthCheckService or similar
+   - Verify: types work, errors propagate, tests pass
+   - Goal: De-risk before building real services
+
+**Success Criteria:**
+- `runWithRuntime()` function exists and has tests
+- At least one service works (ConfigService or HealthCheckService)
+- Team understands service factory patterns (knowledge share session)
+- Type check passes: `bun run typecheck`
+- Tests pass: `bun run test`
+
+**Rollback Triggers:**
+- If spike takes >1 week → pattern too complex, reconsider approach
+- If type errors at boundary unsolvable → use simpler promise wrapper pattern
+- If team consensus: Effect overhead not worth it → stay with current atoms layer
+
+**Risk Mitigation:**
+- Start with simplest pattern (sync factory) to prove concept
+- Reference EffectPatterns examples from Hivemind
+- Pair programming for Effect learning curve
 
 ### Phase 1: Core Foundations (Priority 1 Gaps) - 2-3 days
 
@@ -477,6 +530,49 @@ export function useSessionStatus(sessionId: string): SessionStatus {
 - No Effect imports in React layer
 
 **Rollback:** Feature flag `USE_CORE_STATUS_API`, dual implementation for 1 week
+
+### Phase 1.5: Backend Coordination (CRITICAL)
+
+**Goal:** Verify backend capabilities BEFORE committing to Core API designs for Gaps 4, 6, 8.
+
+**Duration:** 2-3 days (async communication + spike if needed)
+
+**Why Now:** Phase 1 proved the pattern works. Before scaling to Phases 2-4, verify we're not solving problems backend should handle.
+
+**Critical Questions for Backend Team:**
+
+1. **Gap 8 (Context Usage):** Does backend include `contextUsage` in SSE `message.updated` events?
+   - IF YES: Skip Phase 4 entirely (2-3 days saved)
+   - IF NO: Find computation location (SSE handler?) and proceed with Core API
+
+2. **Gap 4 (Bootstrap Status):** Can backend include `status` field in `/session/list` response?
+   - IF YES: Server-side solution (better performance than Core)
+   - IF NO: Proceed with Core `listWithStatus()` approach
+
+3. **Gap 6 (Status Normalization):** Will backend standardize status format to `"running" | "completed"`?
+   - IF YES: Problem solved at source, skip Core normalization
+   - IF NO: Proceed with Core `normalizeStatus()` in SSE layer
+
+**Deliverables:**
+- Backend team commitment (YES/NO/MAYBE) per question
+- Updated Phase 2-4 plan based on answers
+- Document backend changes timeline if applicable
+- Go/no-go decision for remaining phases
+
+**Success Criteria:**
+- All 3 questions answered by backend team
+- Updated implementation plan reflects backend answers
+- No wasted work (skip phases if backend solves gaps)
+
+**Rollback Triggers:**
+- If backend team can't commit to ANY of the above → pause and escalate
+- If backend timeline is >1 month → proceed with Core approach as interim
+- If backend says "we already do this" for Gap 8 → validate immediately
+
+**Risk Mitigation:**
+- Frame as collaboration, not "can you do our work?"
+- Offer to implement backend changes if capacity issue
+- Document answers in ADR for future reference
 
 ### Phase 2: Data Transformation (Priority 2 Gaps) - 2-3 days
 
@@ -554,6 +650,94 @@ export function useSessionStatus(sessionId: string): SessionStatus {
 
 **Rollback:** Feature flag `USE_CORE_CONTEXT_USAGE`, dual implementation
 
+## Testing Strategy
+
+### Core Service Testing
+
+Effect services require Layer mocking for dependency injection:
+
+```typescript
+// Example: Testing StatusService
+import { Effect, Layer } from "effect"
+import { describe, it, expect } from "vitest"
+import { StatusService } from "../services/status-service"
+import { SDKService } from "../services/sdk-service"
+
+describe("StatusService", () => {
+  it("returns 'running' when sessionStatus map shows running", async () => {
+    // Mock SDKService layer
+    const mockSDK = Layer.succeed(SDKService, {
+      sessions: { get: () => Effect.succeed({ id: "ses-123", status: "running" }) }
+    })
+    
+    // Mock StatusMapService layer
+    const mockStatusMap = Layer.succeed(StatusMapService, {
+      get: (id: string) => Effect.succeed("running")
+    })
+    
+    // Compose test layer
+    const testLayer = Layer.mergeAll(mockSDK, mockStatusMap)
+    
+    // Run test
+    const result = await StatusService.computeStatus("ses-123")
+      .pipe(Effect.provide(testLayer), Effect.runPromise)
+    
+    expect(result).toBe("running")
+  })
+})
+```
+
+### Promise API Testing
+
+Promise APIs are easier to test (no Effect knowledge needed):
+
+```typescript
+// Example: Testing sessions.getStatus()
+import { describe, it, expect, vi } from "vitest"
+import { getStatus } from "../api/sessions"
+
+describe("sessions.getStatus", () => {
+  it("returns status from service", async () => {
+    // Mock runWithRuntime at module level
+    vi.mock("../runtime/run-with-runtime", () => ({
+      runWithRuntime: vi.fn().mockResolvedValue("running")
+    }))
+    
+    const status = await getStatus("ses-123")
+    expect(status).toBe("running")
+  })
+})
+```
+
+### Integration Testing
+
+Test full stack (React hook → Core API → Effect service):
+
+```typescript
+// Example: Integration test for useSessionStatus
+import { renderHook } from "@testing-library/react"
+import { useSessionStatus } from "../hooks/use-session-status"
+
+describe("useSessionStatus integration", () => {
+  it("fetches status from Core and updates", async () => {
+    const { result, waitFor } = renderHook(() => useSessionStatus("ses-123"))
+    
+    expect(result.current).toBe("completed") // Initial
+    
+    await waitFor(() => {
+      expect(result.current).toBe("running") // After fetch
+    })
+  })
+})
+```
+
+### Test Coverage Requirements
+
+- **Core services:** >80% coverage (pure Effect programs, easy to test)
+- **Promise APIs:** 100% coverage (thin wrappers, critical boundary)
+- **React hooks:** >70% coverage (integration tests, slower)
+- **Utils (format.ts):** 100% coverage (pure functions, trivial to test)
+
 ### Phase 5: Backend Coordination (Optional) - 1-2 weeks
 
 **Goal:** Move some computation to backend for maximum performance.
@@ -593,13 +777,15 @@ export function useSessionStatus(sessionId: string): SessionStatus {
 
 | Phase | Duration | LOC Impact | Risk |
 |-------|----------|------------|------|
+| Phase 0 (Runtime) | 2-3 days | +200 Core | Medium |
 | Phase 1 (Foundations) | 2-3 days | -300 React | Low |
+| Phase 1.5 (Backend Coordination) | 2-3 days | TBD | Low |
 | Phase 2 (Transformation) | 2-3 days | -150 React | Low |
 | Phase 3 (SSE Normalize) | 1-2 days | -40 React | Low |
 | Phase 4 (Context Usage) | 2-3 days | -120 React | Medium |
 | Phase 5 (Backend - Optional) | 1-2 weeks | TBD | Medium |
 | Phase 6 (Cleanup) | 1 day | -4,377 Router | Low |
-| **TOTAL** | **1.5-2 weeks** | **-4,987 net** | **Low-Medium** |
+| **TOTAL** | **2.5-3.5 weeks** | **-4,987 net** | **Low-Medium** |
 
 **Phasing Strategy:**
 - Each phase is independently shippable
@@ -665,6 +851,8 @@ Quick reference to gaps filled by Model B:
 | 6 | Status normalization | -40 | +20 | `sse.normalizeStatus()` (internal) |
 | 7 | Token formatting | -30 | +20 | `format.tokens()` |
 | 8 | Context usage | -120 | +70 | `sessions.getContextUsage()` |
+
+**Gap 8 Clarification:** The `useContextUsage()` hook currently reads from Zustand store, not computing directly. Verify if backend already sends `contextUsage` in SSE `message.updated` events. If YES, Gap 8 is already solved and Phase 4 can be skipped. If NO, find computation location (likely SSE handler) and migrate to Core.
 
 **Total:** -840 React, +430 Core = **-410 net reduction**
 
