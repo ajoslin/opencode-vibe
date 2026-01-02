@@ -6,6 +6,7 @@
  */
 
 import type { WorldState, EnrichedSession } from "@opencode-vibe/core/world"
+import chalk from "chalk"
 
 /**
  * Project aggregation - sessions grouped by directory
@@ -22,8 +23,11 @@ export interface ProjectState {
 /**
  * Format WorldState for pretty output
  * Uses core's WorldState.byDirectory and WorldState.stats
+ *
+ * @param state - Current world state
+ * @param prevState - Previous world state for change detection (optional)
  */
-export function formatWorldState(state: WorldState): string {
+export function formatWorldState(state: WorldState, prevState?: WorldState): string {
 	const lines: string[] = []
 
 	lines.push("╔═══════════════════════════════════════════════════════════╗")
@@ -74,10 +78,11 @@ export function formatWorldState(state: WorldState): string {
 			const statusIcon = isStreaming ? "⚡" : session.isActive ? "🔵" : "⚫"
 			const shortId = session.id.slice(-8)
 			const ago = formatTimeAgo(session.lastActivityAt)
-			lines.push(
-				`║       ${statusIcon} ${shortId} (${session.messages.length} msgs, ${ago})`.padEnd(58) +
-					" ║",
-			)
+			const changeType = detectChange(session.id, session.messages.length, prevState)
+			const indicator = getChangeIndicator(changeType)
+
+			const sessionLine = `║       ${statusIcon} ${shortId} (${session.messages.length} msgs, ${ago})`
+			lines.push(sessionLine.padEnd(58) + " ║" + indicator)
 		}
 
 		if (project.sessions.length > 3) {
@@ -104,4 +109,42 @@ function formatTimeAgo(timestamp: number): string {
 	if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
 	if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
 	return `${Math.floor(diff / 86400000)}d ago`
+}
+
+/**
+ * Detect change type for a session
+ */
+function detectChange(
+	sessionId: string,
+	messageCount: number,
+	prevState?: WorldState,
+): "new" | "updated" | "unchanged" {
+	if (!prevState) {
+		return "unchanged"
+	}
+
+	const prevSession = prevState.sessions.find((s) => s.id === sessionId)
+
+	if (!prevSession) {
+		return "new"
+	}
+
+	if (prevSession.messages.length !== messageCount) {
+		return "updated"
+	}
+
+	return "unchanged"
+}
+
+/**
+ * Get change indicator for a session
+ */
+function getChangeIndicator(changeType: "new" | "updated" | "unchanged"): string {
+	if (changeType === "new") {
+		return chalk.green("  ← NEW")
+	}
+	if (changeType === "updated") {
+		return chalk.yellow("  ← UPDATED")
+	}
+	return ""
 }

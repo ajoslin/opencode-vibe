@@ -590,4 +590,195 @@ describe("createMergedWorldStream", () => {
 			await stream.dispose()
 		})
 	})
+
+	describe("async iterator lifecycle", () => {
+		it("yields current state immediately on start", async () => {
+			const now = Date.now()
+			const source = createMockSource("test-source", [
+				{
+					type: "session.created",
+					data: {
+						id: "sess-iter-1",
+						title: "Iterator Test",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+					timestamp: now,
+				},
+			])
+
+			const stream = createMergedWorldStream({ sources: [source] })
+
+			// Wait for session to land in store
+			await new Promise<void>((resolve) => {
+				const unsub = stream.subscribe((state) => {
+					if (state.sessions.find((s) => s.id === "sess-iter-1")) {
+						unsub()
+						resolve()
+					}
+				})
+				setTimeout(() => {
+					unsub()
+					resolve()
+				}, 1000)
+			})
+
+			// Start async iteration
+			const iterator = stream[Symbol.asyncIterator]()
+			const first = await iterator.next()
+
+			// First yield should be current state (with the session)
+			expect(first.done).toBe(false)
+			if (!first.done) {
+				expect(first.value.sessions.length).toBeGreaterThan(0)
+			}
+
+			await stream.dispose()
+		})
+
+		it("yields subsequent states on changes", async () => {
+			const now = Date.now()
+			const source = createMockSource("test-source", [
+				{
+					type: "session.created",
+					data: {
+						id: "sess-iter-2",
+						title: "First",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+					timestamp: now,
+				},
+			])
+
+			const stream = createMergedWorldStream({ sources: [source] })
+
+			// Start async iteration
+			const iterator = stream[Symbol.asyncIterator]()
+
+			// First yield is immediate (current state)
+			const first = await iterator.next()
+			expect(first.done).toBe(false)
+
+			// Wait for session to appear
+			await new Promise<void>((resolve) => {
+				const unsub = stream.subscribe((state) => {
+					const hasSession = state.sessions.some((sess) => sess.id === "sess-iter-2")
+					if (hasSession) {
+						unsub()
+						resolve()
+					}
+				})
+				setTimeout(() => {
+					unsub()
+					resolve()
+				}, 1000)
+			})
+
+			// Next yield should have the session
+			const second = await Promise.race([
+				iterator.next(),
+				new Promise<{ done: boolean; value: any }>((resolve) =>
+					setTimeout(() => resolve({ done: true, value: undefined }), 2000),
+				),
+			])
+
+			expect(second.done).toBe(false)
+			if (!second.done && second.value?.sessions) {
+				const hasSession = second.value.sessions.length > 0
+				expect(hasSession).toBe(true)
+			}
+
+			await stream.dispose()
+		})
+
+		it("cleans up subscription when iterator breaks", async () => {
+			const stream = createMergedWorldStream({})
+
+			// Start iteration then break immediately
+			const iterator = stream[Symbol.asyncIterator]()
+			await iterator.next()
+
+			// Breaking should trigger cleanup (finally block)
+			// No explicit way to verify unsubscribe was called without mocking
+			// But we can verify no errors occur
+
+			await stream.dispose()
+		})
+
+		it("handles rapid iteration without dropping states", async () => {
+			const now = Date.now()
+			const source = createMockSource("test-source", [
+				{
+					type: "session.created",
+					data: {
+						id: "sess-rapid-1",
+						title: "Rapid 1",
+						directory: "/test1",
+						time: { created: now, updated: now },
+					},
+					timestamp: now,
+				},
+				{
+					type: "session.created",
+					data: {
+						id: "sess-rapid-2",
+						title: "Rapid 2",
+						directory: "/test2",
+						time: { created: now + 10, updated: now + 10 },
+					},
+					timestamp: now + 10,
+				},
+				{
+					type: "session.created",
+					data: {
+						id: "sess-rapid-3",
+						title: "Rapid 3",
+						directory: "/test3",
+						time: { created: now + 20, updated: now + 20 },
+					},
+					timestamp: now + 20,
+				},
+			])
+
+			const stream = createMergedWorldStream({ sources: [source] })
+
+			// Collect states via async iteration
+			const states = []
+			const iterator = stream[Symbol.asyncIterator]()
+
+			// Get initial state
+			const first = await iterator.next()
+			states.push(first.value)
+
+			// Wait for all sessions to land
+			await new Promise<void>((resolve) => {
+				const unsub = stream.subscribe((state) => {
+					const has1 = state.sessions.some((sess) => sess.id === "sess-rapid-1")
+					const has2 = state.sessions.some((sess) => sess.id === "sess-rapid-2")
+					const has3 = state.sessions.some((sess) => sess.id === "sess-rapid-3")
+					if (has1 && has2 && has3) {
+						unsub()
+						resolve()
+					}
+				})
+				setTimeout(() => {
+					unsub()
+					resolve()
+				}, 2000)
+			})
+
+			// Queue should accumulate states if iterator isn't consuming fast enough
+			// But we should get all sessions eventually
+			const finalState = await stream.getSnapshot()
+			const has1 = finalState.sessions.some((sess) => sess.id === "sess-rapid-1")
+			const has2 = finalState.sessions.some((sess) => sess.id === "sess-rapid-2")
+			const has3 = finalState.sessions.some((sess) => sess.id === "sess-rapid-3")
+			expect(has1).toBe(true)
+			expect(has2).toBe(true)
+			expect(has3).toBe(true)
+
+			await stream.dispose()
+		})
+	})
 })

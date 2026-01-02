@@ -7,11 +7,12 @@
  * Pattern: Effect Layer with acquireRelease for DB connection lifecycle
  */
 
-import { Effect, Context, Layer } from "effect"
+import { Effect, Context, Layer, Metric } from "effect"
 import { createClient, type Client } from "@libsql/client"
 import type { StreamCursor } from "./cursor.js"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
+import { WorldMetrics } from "./metrics.js"
 
 /**
  * CursorStore service interface
@@ -63,54 +64,135 @@ const initSchema = (client: Client): Effect.Effect<void, Error, never> =>
  */
 const makeCursorStore = (client: Client): CursorStoreService => ({
 	saveCursor: (cursor: StreamCursor) =>
-		Effect.tryPromise({
-			try: async () => {
-				await client.execute({
-					sql: `
-						INSERT INTO cursors (project_key, offset, timestamp, updated_at)
-						VALUES (?, ?, ?, unixepoch())
-						ON CONFLICT(project_key) DO UPDATE SET
-							offset = excluded.offset,
-							timestamp = excluded.timestamp,
-							updated_at = unixepoch()
-					`,
-					args: [cursor.projectKey, cursor.offset, cursor.timestamp],
-				})
-			},
-			catch: (error) => new Error(`Failed to save cursor: ${error}`),
+		Effect.gen(function* () {
+			const startTime = performance.now()
+
+			yield* Effect.logDebug("Cursor save started").pipe(
+				Effect.annotateLogs({
+					operation: "save",
+					projectKey: cursor.projectKey,
+				}),
+			)
+
+			yield* Effect.tryPromise({
+				try: async () => {
+					await client.execute({
+						sql: `
+							INSERT INTO cursors (project_key, offset, timestamp, updated_at)
+							VALUES (?, ?, ?, unixepoch())
+							ON CONFLICT(project_key) DO UPDATE SET
+								offset = excluded.offset,
+								timestamp = excluded.timestamp,
+								updated_at = unixepoch()
+						`,
+						args: [cursor.projectKey, cursor.offset, cursor.timestamp],
+					})
+				},
+				catch: (error) => new Error(`Failed to save cursor: ${error}`),
+			})
+
+			const durationSeconds = (performance.now() - startTime) / 1000
+			yield* Metric.update(
+				WorldMetrics.cursorOperationsTotal.pipe(Metric.tagged("operation", "save")),
+				1,
+			)
+			yield* Metric.update(WorldMetrics.cursorQuerySeconds, durationSeconds)
+
+			yield* Effect.logDebug("Cursor save completed").pipe(
+				Effect.annotateLogs({
+					operation: "save",
+					projectKey: cursor.projectKey,
+					durationMs: String((performance.now() - startTime).toFixed(2)),
+				}),
+			)
 		}),
 
 	loadCursor: (projectKey: string) =>
-		Effect.tryPromise({
-			try: async () => {
-				const result = await client.execute({
-					sql: "SELECT offset, timestamp, project_key FROM cursors WHERE project_key = ?",
-					args: [projectKey],
-				})
+		Effect.gen(function* () {
+			const startTime = performance.now()
 
-				if (result.rows.length === 0) {
-					return null
-				}
+			yield* Effect.logDebug("Cursor load started").pipe(
+				Effect.annotateLogs({
+					operation: "load",
+					projectKey,
+				}),
+			)
 
-				const row = result.rows[0]
-				return {
-					offset: String(row.offset),
-					timestamp: Number(row.timestamp),
-					projectKey: String(row.project_key),
-				} as StreamCursor
-			},
-			catch: (error) => new Error(`Failed to load cursor: ${error}`),
+			const result = yield* Effect.tryPromise({
+				try: async () => {
+					const result = await client.execute({
+						sql: "SELECT offset, timestamp, project_key FROM cursors WHERE project_key = ?",
+						args: [projectKey],
+					})
+
+					if (result.rows.length === 0) {
+						return null
+					}
+
+					const row = result.rows[0]
+					return {
+						offset: String(row.offset),
+						timestamp: Number(row.timestamp),
+						projectKey: String(row.project_key),
+					} as StreamCursor
+				},
+				catch: (error) => new Error(`Failed to load cursor: ${error}`),
+			})
+
+			const durationSeconds = (performance.now() - startTime) / 1000
+			yield* Metric.update(
+				WorldMetrics.cursorOperationsTotal.pipe(Metric.tagged("operation", "load")),
+				1,
+			)
+			yield* Metric.update(WorldMetrics.cursorQuerySeconds, durationSeconds)
+
+			yield* Effect.logDebug("Cursor load completed").pipe(
+				Effect.annotateLogs({
+					operation: "load",
+					projectKey,
+					found: String(result !== null),
+					durationMs: String((performance.now() - startTime).toFixed(2)),
+				}),
+			)
+
+			return result
 		}),
 
 	deleteCursor: (projectKey: string) =>
-		Effect.tryPromise({
-			try: async () => {
-				await client.execute({
-					sql: "DELETE FROM cursors WHERE project_key = ?",
-					args: [projectKey],
-				})
-			},
-			catch: (error) => new Error(`Failed to delete cursor: ${error}`),
+		Effect.gen(function* () {
+			const startTime = performance.now()
+
+			yield* Effect.logDebug("Cursor delete started").pipe(
+				Effect.annotateLogs({
+					operation: "delete",
+					projectKey,
+				}),
+			)
+
+			yield* Effect.tryPromise({
+				try: async () => {
+					await client.execute({
+						sql: "DELETE FROM cursors WHERE project_key = ?",
+						args: [projectKey],
+					})
+				},
+				catch: (error) => new Error(`Failed to delete cursor: ${error}`),
+			})
+
+			const durationSeconds = (performance.now() - startTime) / 1000
+			yield* Metric.update(
+				WorldMetrics.cursorOperationsTotal.pipe(Metric.tagged("operation", "delete")),
+				1,
+			)
+			yield* Metric.update(WorldMetrics.cursorQuerySeconds, durationSeconds)
+
+			yield* Effect.logDebug("Cursor delete completed").pipe(
+				Effect.annotateLogs({
+					operation: "delete",
+					projectKey,
+					durationMs: String((performance.now() - startTime).toFixed(2)),
+				}),
+			)
 		}),
 })
 

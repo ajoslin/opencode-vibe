@@ -321,6 +321,125 @@ describe("Merged Stream Integration Tests", () => {
 			await stream.dispose()
 		})
 
+		it("marks session as active when receiving message events", async () => {
+			const now = Date.now()
+
+			// Create session (no explicit status - defaults to "completed")
+			const sessionSource = createMockSource("session-source", [
+				{
+					type: "session.created",
+					data: {
+						id: "sess-implicit-active",
+						title: "Implicit Active Test",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+					timestamp: now,
+				},
+			])
+
+			// Message event arrives - session should become active
+			const messageSource = createMockSource("message-source", [
+				{
+					type: "message.created",
+					data: {
+						id: "msg-active-1",
+						sessionID: "sess-implicit-active",
+						role: "assistant",
+						time: { created: now + 10, updated: now + 10 },
+					},
+					timestamp: now + 10,
+				},
+			])
+
+			const stream = createMergedWorldStream({
+				sources: [sessionSource, messageSource],
+			})
+
+			// Wait for message to appear
+			await waitForCondition(stream.subscribe, (state) => {
+				const session = state.sessions.find((s) => s.id === "sess-implicit-active")
+				return session?.messages.length === 1
+			})
+
+			const state = await stream.getSnapshot()
+			const session = state.sessions.find((s) => s.id === "sess-implicit-active")
+
+			expect(session).toBeDefined()
+			// Session should be marked active because we received events for it
+			expect(session?.isActive).toBe(true)
+			expect(session?.status).toBe("running")
+
+			await stream.dispose()
+		})
+
+		it("marks session as active when receiving part events", async () => {
+			const now = Date.now()
+
+			// Create session and message
+			const sessionSource = createMockSource("session-source", [
+				{
+					type: "session.created",
+					data: {
+						id: "sess-part-active",
+						title: "Part Active Test",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+					timestamp: now,
+				},
+			])
+
+			const messageSource = createMockSource("message-source", [
+				{
+					type: "message.created",
+					data: {
+						id: "msg-part-1",
+						sessionID: "sess-part-active",
+						role: "assistant",
+						time: { created: now, updated: now },
+					},
+					timestamp: now,
+				},
+			])
+
+			// Part event arrives - session should become active
+			const partSource = createMockSource("part-source", [
+				{
+					type: "part.updated",
+					data: {
+						id: "part-streaming",
+						messageID: "msg-part-1",
+						type: "text",
+						state: { text: "Hello..." },
+						time: { created: now + 10, updated: now + 10 },
+					},
+					timestamp: now + 10,
+				},
+			])
+
+			const stream = createMergedWorldStream({
+				sources: [sessionSource, messageSource, partSource],
+			})
+
+			// Wait for part to appear
+			await waitForCondition(stream.subscribe, (state) => {
+				const session = state.sessions.find((s) => s.id === "sess-part-active")
+				const message = session?.messages.find((m) => m.id === "msg-part-1")
+				return message?.parts.length === 1
+			})
+
+			const state = await stream.getSnapshot()
+			const session = state.sessions.find((s) => s.id === "sess-part-active")
+
+			expect(session).toBeDefined()
+			// Session should be marked active because we received part events
+			expect(session?.isActive).toBe(true)
+			expect(session?.status).toBe("running")
+
+			await stream.dispose()
+		})
+
 		it("routes session.status events from multiple sources", async () => {
 			const now = Date.now()
 

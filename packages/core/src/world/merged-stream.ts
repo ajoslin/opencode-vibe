@@ -16,7 +16,7 @@
  * - Graceful degradation when sources unavailable
  */
 
-import { Effect, Stream, pipe } from "effect"
+import { Effect, Stream, pipe, Scope, Exit } from "effect"
 import type { EventSource, SourceEvent } from "./event-source.js"
 import type { WorldStreamConfig, WorldStreamHandle, WorldState } from "./types.js"
 import { WorldStore } from "./atoms.js"
@@ -62,15 +62,31 @@ function routeEventToStore(event: SourceEvent, store: WorldStore): void {
 			const message = data as Message
 			if (message?.id) {
 				store.upsertMessage(message)
+				// Receiving message events = session is active
+				// Mark as "running" since we're getting live data
+				if (message.sessionID) {
+					store.updateStatus(message.sessionID, "running")
+				}
 			}
 			break
 		}
 
 		case "part.created":
-		case "part.updated": {
-			const part = data as Part
-			if (part?.id) {
-				store.upsertPart(part)
+		case "part.updated":
+		case "message.part.updated": {
+			// Handle both part.* and message.part.updated event types
+			// message.part.updated wraps part data in a "part" property
+			const partData =
+				type === "message.part.updated" ? (data as { part?: Part }).part : (data as Part)
+
+			if (partData?.id) {
+				store.upsertPart(partData)
+				// Receiving part events = session is active
+				// Parts from SSE have sessionID directly
+				const sessionId = (partData as Part & { sessionID?: string }).sessionID
+				if (sessionId) {
+					store.updateStatus(sessionId, "running")
+				}
 			}
 			break
 		}
@@ -202,38 +218,78 @@ export function createMergedWorldStream(config: MergedStreamConfig = {}): Merged
 
 	/**
 	 * Async iterator for world state changes
+	 *
+	 * Uses Effect acquireRelease for guaranteed cleanup.
+	 * Pattern from Hivemind (mem-fa2e52bd6e3f080b): acquireRelease ensures
+	 * cleanup (unsubscribe) is called even on interruption/scope close.
 	 */
 	async function* asyncIterator(): AsyncIterableIterator<WorldState> {
 		// Yield current state immediately
 		yield store.getState()
 
-		// Then yield on every change
-		const queue: WorldState[] = []
-		let resolveNext: ((state: WorldState) => void) | null = null
-
-		const unsubscribe = store.subscribe((state) => {
-			if (resolveNext) {
-				resolveNext(state)
-				resolveNext = null
-			} else {
-				queue.push(state)
-			}
-		})
+		// Use Effect Scope + acquireRelease for subscription lifecycle
+		// This guarantees unsubscribe is called even if iterator is abandoned mid-stream
+		const scope = await Effect.runPromise(Scope.make())
 
 		try {
-			while (true) {
-				if (queue.length > 0) {
-					yield queue.shift()!
-				} else {
-					// Wait for next state
-					const state = await new Promise<WorldState>((resolve) => {
-						resolveNext = resolve
-					})
-					yield state
+			// Acquire subscription with guaranteed cleanup via acquireRelease
+			const subscription = await Effect.runPromise(
+				pipe(
+					Effect.acquireRelease(
+						// Acquire: subscribe to store and set up queue
+						Effect.sync(() => {
+							const queue: WorldState[] = []
+							let resolveNext: ((state: WorldState) => void) | null = null
+
+							const unsubscribe = store.subscribe((state) => {
+								if (resolveNext) {
+									// If iterator is waiting, resolve immediately
+									resolveNext(state)
+									resolveNext = null
+								} else {
+									// Otherwise, queue for later consumption
+									queue.push(state)
+								}
+							})
+
+							// Return subscription handle with queue access
+							return {
+								unsubscribe,
+								queue,
+								setResolveNext: (fn: typeof resolveNext) => {
+									resolveNext = fn
+								},
+							}
+						}),
+						// Release: guaranteed cleanup (called when scope closes)
+						({ unsubscribe }) => Effect.sync(unsubscribe),
+					),
+					Scope.extend(scope),
+				),
+			)
+
+			// Yield states as they arrive using queue pattern
+			try {
+				while (true) {
+					if (subscription.queue.length > 0) {
+						// Drain queue first
+						yield subscription.queue.shift()!
+					} else {
+						// Wait for next state via Promise
+						const state = await new Promise<WorldState>((resolve) => {
+							subscription.setResolveNext(resolve)
+						})
+						yield state
+					}
 				}
+			} finally {
+				// Close scope to trigger cleanup (acquireRelease calls unsubscribe)
+				await Effect.runPromise(Scope.close(scope, Exit.succeed(undefined as void)))
 			}
-		} finally {
-			unsubscribe()
+		} catch (error) {
+			// Ensure scope is closed on error path too
+			await Effect.runPromise(Scope.close(scope, Exit.succeed(undefined as void)))
+			throw error
 		}
 	}
 

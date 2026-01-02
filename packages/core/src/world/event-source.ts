@@ -15,10 +15,11 @@
  * - Schedule.spaced for polling intervals
  */
 
-import { Effect, Stream, Schedule } from "effect"
+import { Effect, Stream, Schedule, Metric } from "effect"
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import { existsSync } from "node:fs"
+import { WorldMetrics } from "./metrics.js"
 
 /**
  * Generic event source interface
@@ -128,19 +129,59 @@ export function createSwarmDbSource(dbPath: string, pollIntervalMs = 500): Event
 				})
 
 				// Track last seen sequence for cursor-based pagination
+				// Initialize to current max sequence to avoid flooding with historical events
 				let lastSequence = 0
+				let initialized = false
 
 				/**
 				 * Polling function - queries new events and emits them
 				 * Errors are emitted to stream but don't terminate polling
 				 */
 				const poll = async () => {
+					const startTime = performance.now()
+					let eventCount = 0
+
 					try {
+						// On first poll, initialize cursor to current max sequence
+						// This prevents flooding with ALL historical events
+						if (!initialized) {
+							const maxSeqResult = await client.execute({
+								sql: "SELECT MAX(sequence) as max_seq FROM events",
+								args: [],
+							})
+							const maxSeq = maxSeqResult.rows[0]?.max_seq
+							if (typeof maxSeq === "number" && maxSeq > 0) {
+								lastSequence = maxSeq
+							}
+							initialized = true
+
+							await Effect.runPromise(
+								Effect.logInfo("SwarmDb initialized").pipe(
+									Effect.annotateLogs({
+										operation: "init",
+										startingSequence: String(lastSequence),
+									}),
+								),
+							)
+						}
+
+						// Log polling cycle start
+						await Effect.runPromise(
+							Effect.logDebug("SwarmDb polling cycle started").pipe(
+								Effect.annotateLogs({
+									operation: "poll",
+									lastSequence: String(lastSequence),
+								}),
+							),
+						)
+
 						// Query events after last sequence
 						const result = await client.execute({
 							sql: "SELECT * FROM events WHERE sequence > ? ORDER BY sequence",
 							args: [lastSequence],
 						})
+
+						eventCount = result.rows.length
 
 						// Emit each event
 						for (const row of result.rows) {
@@ -170,9 +211,36 @@ export function createSwarmDbSource(dbPath: string, pollIntervalMs = 500): Event
 							// Update cursor
 							lastSequence = dbEvent.sequence
 						}
+
+						// Record metrics
+						const durationSeconds = (performance.now() - startTime) / 1000
+						Effect.runSync(Metric.increment(WorldMetrics.swarmDbPollsTotal))
+						Effect.runSync(Metric.update(WorldMetrics.swarmDbPollSeconds, durationSeconds))
+
+						// Log polling cycle complete
+						await Effect.runPromise(
+							Effect.logDebug("SwarmDb polling cycle completed").pipe(
+								Effect.annotateLogs({
+									operation: "poll",
+									eventCount: String(eventCount),
+									durationMs: String((performance.now() - startTime).toFixed(2)),
+									newSequence: String(lastSequence),
+								}),
+							),
+						)
 					} catch (error) {
 						// Database error - emit to stream but continue polling
 						// Allows recovery from transient failures (db locked, etc.)
+						await Effect.runPromise(
+							Effect.logError("SwarmDb poll failed").pipe(
+								Effect.annotateLogs({
+									operation: "poll",
+									error: error instanceof Error ? error.message : String(error),
+									lastSequence: String(lastSequence),
+								}),
+							),
+						)
+
 						emit.fail(
 							new Error(
 								`SwarmDb poll failed: ${error instanceof Error ? error.message : String(error)}`,

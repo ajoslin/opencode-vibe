@@ -14,19 +14,15 @@ export type { WorldState, WorldStreamConfig, WorldStreamHandle } from "./stream.
 export type { SSEEventInfo } from "./types.js"
 
 // Discovery (for CLI tools that need direct access)
-export { discoverServers } from "./stream.js"
-export type { DiscoveredServer } from "./stream.js"
+export { discoverServers } from "../discovery/server-discovery.js"
+export type { DiscoveredServer } from "../discovery/server-discovery.js"
 
 // SSE internals (for advanced usage)
-export { WorldSSE, createWorldSSE, connectToSSE } from "./sse.js"
-export type { SSEEvent, WorldSSEConfig } from "./sse.js"
+export { WorldSSE, createWorldSSE, connectToSSE, SSEService, SSEServiceLive } from "./sse.js"
+export type { SSEEvent, WorldSSEConfig, SSEServiceInterface } from "./sse.js"
 
 // WorldStore (atom-based state management)
 export { WorldStore } from "./atoms.js"
-
-// SSE Bridge (for React integration)
-export { createSSEBridge } from "./sse-bridge.js"
-export type { SSEBridge } from "./sse-bridge.js"
 
 // Enriched types
 export type { EnrichedMessage, EnrichedSession } from "./types.js"

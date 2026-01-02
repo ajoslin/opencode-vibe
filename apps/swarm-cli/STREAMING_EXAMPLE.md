@@ -1,6 +1,6 @@
 # Swarm CLI Streaming Example
 
-This example shows how to use the new CLI-compatible SSE streaming in swarm-cli.
+This example shows how to use the new CLI-compatible SSE streaming in swarm-cli, including the streaming event aggregation feature that reduces noise from rapid message.part.updated events.
 
 ## Quick Start
 
@@ -343,6 +343,65 @@ describe("Swarm CLI streaming", () => {
   })
 })
 ```
+
+## Streaming Event Aggregation
+
+The watch command now includes intelligent event aggregation for rapid streaming events (like `message.part.updated`).
+
+### Problem
+
+During AI streaming responses, you might receive 47 `message.part.updated` events in rapid succession, flooding the event log:
+
+```
+[sse] 12:34:01 message.part.updated ses_abc/msg_def/part_1
+[sse] 12:34:01 message.part.updated ses_abc/msg_def/part_2
+[sse] 12:34:01 message.part.updated ses_abc/msg_def/part_3
+... (47 lines total)
+```
+
+### Solution
+
+Events are now aggregated into throttled summary lines:
+
+```
+[sse] 12:34:01 streaming          ses_abc123...
+[sse] 12:34:03 streaming          ses_abc... 12 parts
+[sse] 12:34:05 streaming          ses_abc... 28 parts
+[sse] 12:34:07 streaming          ses_abc... 47 parts
+```
+
+### How It Works
+
+The `StreamingAggregator` class (in `output.ts`):
+
+1. **First streaming event**: Emits "streaming started" line
+2. **Subsequent events**: Aggregated silently, count incremented
+3. **Every 2 seconds**: Summary line emitted with current part count
+4. **Session end**: Final summary emitted, stream cleared
+
+### Configuration
+
+The throttle interval is configurable:
+
+```typescript
+import { StreamingAggregator } from "./output.js"
+
+const aggregator = new StreamingAggregator({ throttleMs: 3000 }) // 3 seconds
+```
+
+Default is 2000ms (2 seconds) to balance real-time feedback and noise reduction.
+
+### Testing
+
+```bash
+# Unit tests (StreamingAggregator class)
+bun test apps/swarm-cli/src/output.test.ts
+
+# Integration tests (watch command behavior)
+bun test apps/swarm-cli/src/commands/watch.integration.test.ts
+```
+
+All 18 tests should pass.
 
 ## See Also
 

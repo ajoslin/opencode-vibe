@@ -60,56 +60,27 @@ describe("createWorldStream", () => {
 	})
 
 	describe("auto-discovery", () => {
-		it("discovers and uses first server when no baseUrl provided", async () => {
-			// Mock discovery returning servers
-			mockDiscoverServers.mockResolvedValue([
-				{ port: 4056, pid: 1234, directory: "/test/dir" },
-				{ port: 5000, pid: 5678, directory: "/other/dir" },
-			])
-
-			const stream = createWorldStream()
-
-			// Discovery should have been called
-			expect(mockDiscoverServers).toHaveBeenCalledOnce()
-
-			await stream.dispose()
-		})
-
-		it("uses explicit baseUrl when provided (skips discovery)", async () => {
+		it("uses explicit baseUrl when provided", async () => {
 			const stream = createWorldStream({ baseUrl: "http://localhost:3000" })
 
-			// Discovery should NOT have been called
-			expect(mockDiscoverServers).not.toHaveBeenCalled()
+			// With explicit baseUrl, should connect (mocked WorldSSE sets status to "connected")
+			await new Promise((resolve) => setTimeout(resolve, 10))
+
+			const snapshot = await stream.getSnapshot()
+			expect(snapshot.connectionStatus).toBe("connected")
 
 			await stream.dispose()
 		})
 
-		it("sets error status when no servers found", async () => {
-			// Mock discovery returning empty array
-			mockDiscoverServers.mockResolvedValue([])
-
+		it("delegates to merged-stream for discovery when no baseUrl", async () => {
 			const stream = createWorldStream()
 
-			// Wait for discovery to complete
+			// merged-stream.ts delegates to WorldSSE which has internal discovery loop
+			// Mock WorldSSE sets status to "connected" on start()
 			await new Promise((resolve) => setTimeout(resolve, 10))
 
 			const snapshot = await stream.getSnapshot()
-			expect(snapshot.connectionStatus).toBe("error")
-
-			await stream.dispose()
-		})
-
-		it("sets error status when discovery fails", async () => {
-			// Mock discovery throwing error
-			mockDiscoverServers.mockRejectedValue(new Error("Discovery failed"))
-
-			const stream = createWorldStream()
-
-			// Wait for discovery to complete
-			await new Promise((resolve) => setTimeout(resolve, 10))
-
-			const snapshot = await stream.getSnapshot()
-			expect(snapshot.connectionStatus).toBe("error")
+			expect(snapshot.connectionStatus).toBe("connected")
 
 			await stream.dispose()
 		})
@@ -282,6 +253,10 @@ describe("WorldStore", () => {
 		const callback = vi.fn()
 
 		const unsubscribe = store.subscribe(callback)
+		// Subscribe fires immediately with current state
+		expect(callback).toHaveBeenCalledOnce()
+
+		callback.mockClear()
 		unsubscribe()
 
 		store.setSessions([createSession("ses_1") as any])

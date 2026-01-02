@@ -9,9 +9,11 @@
 
 import { Atom } from "@effect-atom/atom"
 import * as Registry from "@effect-atom/atom/Registry"
+import { Effect, Metric } from "effect"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
 import type { EnrichedMessage, EnrichedSession, WorldState } from "./types.js"
+import { WorldMetrics } from "./metrics.js"
 
 /**
  * Internal state container
@@ -152,10 +154,25 @@ export class WorldStore {
 	}
 
 	/**
+	 * Get sessionID for a message by messageID
+	 * Used to mark session as active when receiving part events
+	 */
+	getMessageSessionId(messageId: string): string | undefined {
+		const index = this.binarySearch(this.data.messages, messageId)
+		if (index >= 0) {
+			return this.data.messages[index].sessionID
+		}
+		return undefined
+	}
+
+	/**
 	 * Binary search for item by ID in sorted array
 	 * @returns Index if found, or negative insertion point - 1 if not found
 	 */
 	private binarySearch(array: Array<{ id: string }>, id: string): number {
+		// Increment binary search counter
+		Effect.runSync(Metric.increment(WorldMetrics.binarySearchTotal))
+
 		let left = 0
 		let right = array.length - 1
 
@@ -200,6 +217,17 @@ export class WorldStore {
 	 * Derive enriched world state from raw data
 	 */
 	private deriveWorldState(data: WorldStateData): WorldState {
+		// Log derivation start with input counts
+		Effect.runSync(
+			Effect.logDebug("World state derivation started").pipe(
+				Effect.annotateLogs({
+					sessionCount: data.sessions.length,
+					messageCount: data.messages.length,
+					partCount: data.parts.length,
+				}),
+			),
+		)
+
 		// Build message ID -> parts map
 		const partsByMessage = new Map<string, Part[]>()
 		for (const part of data.parts) {
@@ -207,6 +235,14 @@ export class WorldStore {
 			existing.push(part)
 			partsByMessage.set(part.messageID, existing)
 		}
+
+		Effect.runSync(
+			Effect.logDebug("Parts indexed by message").pipe(
+				Effect.annotateLogs({
+					messageCount: partsByMessage.size,
+				}),
+			),
+		)
 
 		// Build session ID -> messages map
 		const messagesBySession = new Map<string, EnrichedMessage[]>()
@@ -223,6 +259,15 @@ export class WorldStore {
 			existing.push(enrichedMsg)
 			messagesBySession.set(msg.sessionID, existing)
 		}
+
+		Effect.runSync(
+			Effect.logDebug("Messages indexed by session").pipe(
+				Effect.annotateLogs({
+					sessionCount: messagesBySession.size,
+					totalMessages: data.messages.length,
+				}),
+			),
+		)
 
 		// Build enriched sessions
 		const enrichedSessions: EnrichedSession[] = data.sessions.map((session) => {
@@ -287,7 +332,7 @@ export class WorldStore {
 			streaming: enrichedSessions.filter((s) => s.messages.some((m) => m.isStreaming)).length,
 		}
 
-		return {
+		const worldState = {
 			sessions: enrichedSessions,
 			activeSessionCount,
 			activeSession,
@@ -296,6 +341,26 @@ export class WorldStore {
 			byDirectory,
 			stats,
 		}
+
+		// Update metrics after derivation completes
+		Effect.runSync(
+			Effect.all([
+				Metric.set(WorldMetrics.worldSessionsTotal, stats.total),
+				Metric.set(WorldMetrics.worldSessionsActive, stats.active),
+			]).pipe(
+				Effect.tap(() =>
+					Effect.logDebug("World state derivation completed").pipe(
+						Effect.annotateLogs({
+							totalSessions: stats.total,
+							activeSessions: stats.active,
+							streamingSessions: stats.streaming,
+						}),
+					),
+				),
+			),
+		)
+
+		return worldState
 	}
 }
 

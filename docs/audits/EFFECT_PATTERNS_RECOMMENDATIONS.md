@@ -27,6 +27,50 @@
 
 ---
 
+## Implementation Status (Updated 2026-01-02)
+
+```
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                        IMPLEMENTATION PROGRESS                            ║
+╠═══════════════════════════════════════════════════════════════════════════╣
+║  Phase 1: O11y Foundation                              ██████████ 100%   ║
+║  Phase 2: Advanced O11y + Safety                       ████████░░  80%   ║
+║  Phase 3: Production Stack                             ░░░░░░░░░░   0%   ║
+║  Quick Wins                                            ██████████ 100%   ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+```
+
+### Completed Work
+
+| Item | Status | Notes |
+|------|--------|-------|
+| **Quick Win 1: Schedule for Retry** | ✅ DONE | `Schedule.exponential` + `Schedule.jittered` in sse.ts:60-65 |
+| **Quick Win 2: Delete sse-bridge.ts** | ✅ DONE | File deleted, -131 LOC |
+| **Quick Win 3: Basic Logging** | ✅ DONE | Effect.logDebug/logInfo/logWarning throughout |
+| **Quick Win 4: Unify Stream Files** | ✅ DONE | stream.ts delegates to merged-stream.ts (49 LOC) |
+| **Quick Win 5: Basic Metrics** | ✅ DONE | metrics.ts with gauges, counters, histograms |
+| **Phase 1: Logging** | ✅ DONE | Effect.annotateLogs with context in all files |
+| **Phase 1: Basic Metrics** | ✅ DONE | WorldMetrics namespace with 9 metrics |
+| **Phase 2: Tracing (withSpan)** | ✅ DONE | sse.process_event → sse.parse → sse.transform → sse.emit |
+| **Phase 2: Histograms** | ✅ DONE | eventProcessingSeconds, swarmDbPollSeconds, cursorQuerySeconds |
+| **Phase 2: acquireRelease for SSE** | ✅ DONE | sse.ts:214 uses Effect.acquireRelease |
+| **Phase 2: PubSub for n+1 subscribers** | ✅ DONE | pubsub.ts with bounded(32) backpressure |
+
+### Remaining Work
+
+| Item | Status | Priority | Effort |
+|------|--------|----------|--------|
+| **Phase 3: OTel Integration** | ❌ TODO | P3 | 4-5 days |
+| **Phase 3: Grafana Dashboards** | ❌ TODO | P3 | 3-4 days |
+| **Phase 3: Alerting** | ❌ TODO | P3 | 2-3 days |
+| **SSEService Extraction** | ❌ TODO | P2 | 1 day |
+| **WorldStoreService Extraction** | ❌ TODO | P3 | 4 hours |
+| **Scope-based Fiber Management** | ❌ TODO | P2 | 2 hours |
+| **Stream.asyncScoped** | ❌ TODO | P3 | 4 hours |
+| **Unify Atom Definitions** | ❌ TODO | P3 | 2 hours |
+
+---
+
 ## Executive Summary
 
 **CRITICAL FINDING: This is fundamentally an observability project.**
@@ -336,38 +380,36 @@ const connectionEffect = Effect.retry(connectEffect, sseRetrySchedule)
 
 ## 2. Priority Matrix
 
-### Critical Path (Start Here)
+### Critical Path (COMPLETED ✅)
 
-| Priority | Recommendation | Effort | Risk | Impact | Blocking? |
-|----------|----------------|--------|------|--------|-----------|
-| **P0** | **Observability Phase 1** (logging + basic metrics) | 2-3 days | Low | CRITICAL | No |
-| **P0** | **Observability Phase 2** (tracing) | 3-4 days | Low | CRITICAL | Phase 1 |
-| **P1** | **Schedule for retry** (replace manual backoff) | 1 day | Low | High | No |
-| **P1** | **acquireRelease for SSE** (connection safety) | 2 days | Low | High | No |
-| **P2** | **PubSub for n+1 subscribers** (fan-out + backpressure) | 1 day | Medium | High | No |
+| Priority | Recommendation | Effort | Risk | Impact | Status |
+|----------|----------------|--------|------|--------|--------|
+| **P0** | **Observability Phase 1** (logging + basic metrics) | 2-3 days | Low | CRITICAL | ✅ DONE |
+| **P0** | **Observability Phase 2** (tracing) | 3-4 days | Low | CRITICAL | ✅ DONE |
+| **P1** | **Schedule for retry** (replace manual backoff) | 1 day | Low | High | ✅ DONE |
+| **P1** | **acquireRelease for SSE** (connection safety) | 2 days | Low | High | ✅ DONE |
+| **P1** | **PubSub for n+1 subscribers** (fan-out + backpressure) | 1 day | Medium | High | ✅ DONE |
 
-### Quality of Life
+### Quality of Life (NEXT UP)
 
-| Priority | Recommendation | Effort | Risk | Impact | Blocking? |
-|----------|----------------|--------|------|--------|-----------|
-| **P2** | **PubSub for n+1 subscribers** (fan-out + backpressure) | 1 day | Medium | High | No |
-| **P2** | **Observability Phase 3** (advanced metrics) | 2-3 days | Medium | Medium | Phase 1 |
-| **P2** | **SSEService extraction** | 1 day | Medium | Medium | No |
-| **P2** | **Scope-based fiber management** | 2 hours | Low | Medium | SSEService |
-| **P2** | **Schedule.repeat for discovery** | 30 mins | Low | Low | No |
-| **P2** | **Stream.asyncScoped for async iterator** | 4 hours | Low | Medium | No |
+| Priority | Recommendation | Effort | Risk | Impact | Status |
+|----------|----------------|--------|------|--------|--------|
+| **P2** | **SSEService extraction** | 1 day | Medium | Medium | ❌ TODO |
+| **P2** | **Scope-based fiber management** | 2 hours | Low | Medium | ❌ TODO |
+| **P2** | **Schedule.repeat for discovery** | 30 mins | Low | Low | ❌ TODO |
+| **P2** | **Stream.asyncScoped for async iterator** | 4 hours | Low | Medium | ❌ TODO |
 
 ### Future Work (DEFER)
 
-| Priority | Recommendation | Effort | Risk | Impact | Blocking? |
-|----------|----------------|--------|------|--------|-----------|
-| **P3** | **Observability Phase 4** (OTel integration) | 4-5 days | Medium | High | External stack |
-| **P3** | **Observability Phase 5** (dashboards + alerts) | 3-4 days | Low | High | Prometheus + Grafana |
-| **P3** | **WorldStoreService extraction** | 4 hours | Medium | Medium | No |
-| **P3** | **Unify atom definitions** (atoms.ts + derived.ts) | 2 hours | Low | Low | No |
-| **P3** | **Delete sse-bridge.ts** (obsolete) | 15 mins | Low | Low | No |
-| **P3** | **Unify stream.ts and merged-stream.ts** | 1 hour | Low | Medium | No |
-| **P4** | **Stream.mapEffect** (bounded concurrency) | 2 hours | Low | Low | API change |
+| Priority | Recommendation | Effort | Risk | Impact | Status |
+|----------|----------------|--------|------|--------|--------|
+| **P3** | **Observability Phase 4** (OTel integration) | 4-5 days | Medium | High | ❌ TODO |
+| **P3** | **Observability Phase 5** (dashboards + alerts) | 3-4 days | Low | High | ❌ TODO |
+| **P3** | **WorldStoreService extraction** | 4 hours | Medium | Medium | ❌ TODO |
+| **P3** | **Unify atom definitions** (atoms.ts + derived.ts) | 2 hours | Low | Low | ❌ TODO |
+| ~~P3~~ | ~~Delete sse-bridge.ts~~ | ~~15 mins~~ | ~~Low~~ | ~~Low~~ | ✅ DONE |
+| ~~P3~~ | ~~Unify stream.ts and merged-stream.ts~~ | ~~1 hour~~ | ~~Low~~ | ~~Medium~~ | ✅ DONE |
+| **P4** | **Stream.mapEffect** (bounded concurrency) | 2 hours | Low | Low | ❌ TODO |
 
 ---
 

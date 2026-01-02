@@ -9,13 +9,27 @@
  * This replaces MultiServerSSE with a clean, self-contained implementation.
  */
 
-import { Effect, Stream, Schedule, Fiber, Ref, Queue, Scope } from "effect"
+import {
+	Effect,
+	Stream,
+	Schedule,
+	Fiber,
+	Ref,
+	Queue,
+	Scope,
+	Metric,
+	Duration,
+	Context,
+	Layer,
+	Exit,
+} from "effect"
 import { createParser, type EventSourceParser } from "eventsource-parser"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
 import { normalizeBackendStatus, type BackendSessionStatus } from "../types/sessions.js"
 import { WorldStore } from "./atoms.js"
 import type { SSEEventInfo } from "./types.js"
+import { WorldMetrics } from "./metrics.js"
 
 // ============================================================================
 // Types
@@ -261,6 +275,7 @@ export class WorldSSE {
 	private discoveryFiber: Fiber.RuntimeFiber<void, Error> | null = null
 	private connectionFibers = new Map<number, Fiber.RuntimeFiber<void, Error>>()
 	private connectedPorts = new Set<number>()
+	private scope: Scope.CloseableScope | null = null // Scope for auto-cleanup
 
 	constructor(store: WorldStore, config: WorldSSEConfig = {}) {
 		this.store = store
@@ -275,11 +290,17 @@ export class WorldSSE {
 
 	/**
 	 * Start discovery and SSE connections
+	 * Creates a Scope for auto-cleanup of fibers
 	 */
 	start(): void {
 		if (this.running) return
 		this.running = true
 		this.store.setConnectionStatus("connecting")
+
+		// Create scope for fiber lifecycle
+		Effect.runPromise(Scope.make()).then((scope) => {
+			this.scope = scope
+		})
 
 		// If serverUrl is provided, connect directly (skip discovery)
 		if (this.config.serverUrl) {
@@ -295,17 +316,26 @@ export class WorldSSE {
 
 	/**
 	 * Stop all connections
+	 * Closes the Scope, auto-interrupting all fibers
 	 */
 	stop(): void {
 		this.running = false
 
-		// Cancel discovery
+		// Close scope - this auto-interrupts all fibers created within it
+		if (this.scope) {
+			Effect.runPromise(Scope.close(this.scope, Exit.succeed(undefined as void))).catch(() => {
+				// Ignore close errors
+			})
+			this.scope = null
+		}
+
+		// Cancel discovery (if not using scope-based management yet)
 		if (this.discoveryFiber) {
 			Effect.runFork(Fiber.interrupt(this.discoveryFiber))
 			this.discoveryFiber = null
 		}
 
-		// Cancel all connections
+		// Cancel all connections (manual cleanup still needed for fibers not in scope)
 		for (const [port, fiber] of this.connectionFibers) {
 			Effect.runFork(Fiber.interrupt(fiber))
 		}
@@ -518,3 +548,81 @@ export class WorldSSE {
 export function createWorldSSE(store: WorldStore, config?: WorldSSEConfig): WorldSSE {
 	return new WorldSSE(store, config)
 }
+
+// ============================================================================
+// SSEService - Effect.Service wrapper
+// ============================================================================
+
+/**
+ * SSEService interface - Effect.Service wrapper around WorldSSE
+ *
+ * Provides scoped lifecycle management with Effect.Service pattern.
+ * The WorldSSE instance is created on acquire and cleaned up on release.
+ */
+export interface SSEServiceInterface {
+	/**
+	 * Start SSE connections
+	 */
+	start: () => Effect.Effect<void, never, never>
+
+	/**
+	 * Stop SSE connections
+	 */
+	stop: () => Effect.Effect<void, never, never>
+
+	/**
+	 * Get connected ports
+	 */
+	getConnectedPorts: () => Effect.Effect<number[], never, never>
+}
+
+/**
+ * SSEService tag for dependency injection
+ */
+export class SSEService extends Context.Tag("SSEService")<SSEService, SSEServiceInterface>() {}
+
+/**
+ * SSEService Layer with scoped lifecycle
+ *
+ * Pattern from cursor-store.ts: Layer.scoped wraps WorldSSE class,
+ * providing Effect-native lifecycle management.
+ *
+ * @param store - WorldStore to feed events into
+ * @param config - SSE configuration
+ *
+ * @example
+ * ```typescript
+ * const program = Effect.gen(function* () {
+ *   const sseService = yield* SSEService
+ *   yield* sseService.start()
+ *   // SSE active within scope
+ *   yield* Effect.sleep(Duration.seconds(10))
+ *   // Auto-cleanup when scope exits
+ * })
+ *
+ * Effect.runPromise(
+ *   program.pipe(Effect.provide(SSEServiceLive(store)))
+ * )
+ * ```
+ */
+export const SSEServiceLive = (
+	store: WorldStore,
+	config?: WorldSSEConfig,
+): Layer.Layer<SSEService, never, never> =>
+	Layer.scoped(
+		SSEService,
+		Effect.acquireRelease(
+			// Acquire: Create WorldSSE instance
+			Effect.sync(() => {
+				const sse = new WorldSSE(store, config)
+
+				return {
+					start: () => Effect.sync(() => sse.start()),
+					stop: () => Effect.sync(() => sse.stop()),
+					getConnectedPorts: () => Effect.sync(() => sse.getConnectedPorts()),
+				}
+			}),
+			// Release: Stop WorldSSE on scope exit
+			(service) => service.stop(),
+		),
+	)

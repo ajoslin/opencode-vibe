@@ -17,6 +17,7 @@ import {
 	createSwarmDbSource,
 	type EventSource,
 	type SSEEventInfo,
+	type WorldState,
 } from "@opencode-vibe/core/world"
 import { existsSync } from "node:fs"
 import os from "node:os"
@@ -28,7 +29,8 @@ import {
 	saveCursor,
 	withLinks,
 	formatNextSteps,
-	formatSSEEvent,
+	StreamingAggregator,
+	GroupedEventLog,
 } from "../output.js"
 import { formatWorldState, type ProjectState } from "../world-state.js"
 
@@ -135,9 +137,16 @@ export async function run(context: CommandContext): Promise<void> {
 			console.log("Discovering servers and connecting... (Ctrl+C to stop)\n")
 		}
 
-		// Rolling event log buffer (last 10 events)
-		const eventLog: string[] = []
-		const MAX_EVENTS = 10
+		// Rolling event log buffer (defaults to last 10 events per group)
+		const eventLog = new GroupedEventLog()
+
+		// Streaming event aggregator (throttles rapid message.part.updated events)
+		const streamingAggregator = new StreamingAggregator({ throttleMs: 2000 })
+
+		// Event count tracking for summary breakdown
+		let sessionEventCount = 0
+		let messageEventCount = 0
+		let partEventCount = 0
 
 		// Build sources array
 		const sources: EventSource[] = []
@@ -161,11 +170,19 @@ export async function run(context: CommandContext): Promise<void> {
 		stream = createMergedWorldStream({
 			sources,
 			onEvent: (event: SSEEventInfo) => {
-				const formatted = formatSSEEvent(event)
-				eventLog.push(formatted)
-				// Keep only last 10 events
-				if (eventLog.length > MAX_EVENTS) {
-					eventLog.shift()
+				// Track event counts by type prefix
+				if (event.type.startsWith("session.")) {
+					sessionEventCount++
+				} else if (event.type.startsWith("message.")) {
+					messageEventCount++
+				} else if (event.type.startsWith("part.")) {
+					partEventCount++
+				}
+
+				// Process through aggregator (handles streaming event throttling)
+				const result = streamingAggregator.process(event)
+				if (result) {
+					eventLog.addEvent(event)
 				}
 			},
 		})
@@ -173,6 +190,7 @@ export async function run(context: CommandContext): Promise<void> {
 		let updateCount = 0
 		let lastWorldUpdate = 0
 		const WORLD_UPDATE_INTERVAL = 500 // Update world view at most every 500ms
+		let prevWorld: WorldState | undefined
 
 		// Subscribe to world state changes (fires immediately with current state)
 		const unsubscribe = stream.subscribe((world) => {
@@ -226,19 +244,24 @@ export async function run(context: CommandContext): Promise<void> {
 			} else {
 				// Clear screen and redraw world state
 				console.clear()
-				console.log(formatWorldState(world))
-				console.log(`\nUpdates received: ${updateCount}`)
+				console.log(formatWorldState(world, prevWorld))
 
-				// Display recent events
-				if (eventLog.length > 0) {
+				// Event count summary breakdown
+				const summary = `\nUpdates received: ${updateCount} (${sessionEventCount} sessions, ${messageEventCount} messages, ${partEventCount} parts)`
+				console.log(summary)
+
+				// Display recent events (grouped by source)
+				const formattedEvents = eventLog.format()
+				if (formattedEvents) {
 					console.log("\nRecent Events:")
-					for (const eventLine of eventLog) {
-						console.log(`  ${eventLine}`)
-					}
+					console.log(formattedEvents)
 				}
 
 				console.log("\nWatching for changes... (Ctrl+C to stop)")
 			}
+
+			// Store current world as previous for next iteration
+			prevWorld = world
 
 			// Persist cursor if configured
 			if (cursorFile) {

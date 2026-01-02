@@ -51,16 +51,24 @@ export type Message = {
 
 /**
  * Part type for streaming message content
+ *
+ * TODO: Replace with SDK types from @opencode-ai/sdk (see cell opencode-next--xts0a-mjx932w6bvg)
  */
 export type Part = {
 	id: string
+	sessionID: string // All parts have sessionID from the backend
 	messageID: string
 	type: string
-	content: string
+	content?: string
+	text?: string // TextPart uses text, not content
 	tool?: string
 	state?: {
 		status?: string
 		[key: string]: unknown
+	}
+	time?: {
+		start: number
+		end?: number
 	}
 	[key: string]: unknown // Allow additional fields
 }

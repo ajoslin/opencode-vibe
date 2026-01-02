@@ -11,9 +11,10 @@
  * - Cleanup via Effect.sync(() => unsubscribe())
  */
 
-import { Effect, Stream } from "effect"
+import { Effect, Stream, Metric } from "effect"
 import type { EventSource, SourceEvent } from "./event-source.js"
 import type { GlobalEvent } from "../types/events.js"
+import { WorldMetrics } from "./metrics.js"
 
 /**
  * SSE interface - duck-typed for testability
@@ -66,8 +67,12 @@ export function createSseSource(sse: SSE): EventSource {
 		 * Check if SSE is connected
 		 */
 		available: () =>
-			Effect.sync(() => {
-				return sse.isConnected()
+			Effect.gen(function* () {
+				const isConnected = sse.isConnected()
+				yield* Effect.logDebug("SSE source availability check").pipe(
+					Effect.annotateLogs({ isConnected }),
+				)
+				return isConnected
 			}),
 
 		/**
@@ -84,23 +89,42 @@ export function createSseSource(sse: SSE): EventSource {
 				// Initialize sequence counter for monotonic ordering
 				let offset = 0
 
+				// Log stream start
+				Effect.runSync(
+					Effect.logInfo("SSE source stream starting").pipe(Effect.annotateLogs({ source: "sse" })),
+				)
+
 				/**
 				 * Subscribe to SSE events and transform to SourceEvent
 				 */
 				const unsubscribe = sse.onEvent((event: GlobalEvent) => {
-					// Transform GlobalEvent to SourceEvent
-					const sourceEvent: SourceEvent = {
-						source: "sse",
-						type: event.payload.type,
-						data: {
-							directory: event.directory,
-							properties: event.payload.properties,
-						},
-						timestamp: Date.now(),
-						sequence: offset++,
-					}
+					const transformEffect = Effect.withSpan("sse_source.transform", {
+						attributes: { eventType: event.payload.type, directory: event.directory },
+					})(
+						Effect.gen(function* () {
+							// Record event metric
+							yield* Metric.update(
+								WorldMetrics.sseEventsTotal.pipe(Metric.tagged("event_type", event.payload.type)),
+								1,
+							)
 
-					emit.single(sourceEvent)
+							// Transform GlobalEvent to SourceEvent
+							const sourceEvent: SourceEvent = {
+								source: "sse",
+								type: event.payload.type,
+								data: {
+									directory: event.directory,
+									properties: event.payload.properties,
+								},
+								timestamp: Date.now(),
+								sequence: offset++,
+							}
+
+							emit.single(sourceEvent)
+						}),
+					)
+
+					Effect.runSync(transformEffect)
 				})
 
 				/**
@@ -108,6 +132,11 @@ export function createSseSource(sse: SSE): EventSource {
 				 * Returns Effect<void> as required by Stream.async
 				 */
 				return Effect.sync(() => {
+					Effect.runSync(
+						Effect.logInfo("SSE source stream stopped").pipe(
+							Effect.annotateLogs({ source: "sse" }),
+						),
+					)
 					unsubscribe()
 					sse.stop()
 				})

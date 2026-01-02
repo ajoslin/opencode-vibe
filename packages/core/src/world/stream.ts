@@ -6,15 +6,19 @@
  *
  * SELF-CONTAINED: Uses WorldSSE for discovery and connections.
  * No dependencies on browser APIs or proxy routes.
+ *
+ * IMPLEMENTATION NOTE: Delegates to createMergedWorldStream with empty sources.
+ * This eliminates ~80 lines of duplication while preserving the API.
  */
 
-import type { WorldState, WorldStreamConfig, WorldStreamHandle } from "./types.js"
-import { WorldStore } from "./atoms.js"
-import { WorldSSE } from "./sse.js"
-import { discoverServers } from "../discovery/server-discovery.js"
+import type { WorldStreamConfig, WorldStreamHandle } from "./types.js"
+import { createMergedWorldStream } from "./merged-stream.js"
 
 /**
  * Create a world stream from SSE events
+ *
+ * Delegates to createMergedWorldStream with no additional event sources.
+ * This provides the same API while enabling future extension via merged streams.
  *
  * @example
  * ```typescript
@@ -36,118 +40,10 @@ import { discoverServers } from "../discovery/server-discovery.js"
  * ```
  */
 export function createWorldStream(config: WorldStreamConfig = {}): WorldStreamHandle {
-	const { baseUrl, autoReconnect = true, onEvent } = config
-
-	const store = new WorldStore()
-
-	// Create SSE instance (will be started after discovery completes)
-	let sse: WorldSSE | null = null
-
-	// If baseUrl provided, start immediately
-	if (baseUrl) {
-		sse = new WorldSSE(store, {
-			serverUrl: baseUrl,
-			autoReconnect,
-			onEvent,
-		})
-		sse.start()
-	} else {
-		// No baseUrl - run discovery first
-		store.setConnectionStatus("connecting")
-		discoverServers()
-			.then((servers) => {
-				if (servers.length === 0) {
-					// No servers found
-					store.setConnectionStatus("error")
-					return
-				}
-				// Use first server (sorted by port in discovery)
-				const firstServer = servers[0]
-				const discoveredUrl = `http://127.0.0.1:${firstServer.port}`
-
-				// Create and start SSE with discovered URL
-				sse = new WorldSSE(store, {
-					serverUrl: discoveredUrl,
-					autoReconnect,
-					onEvent,
-				})
-				sse.start()
-			})
-			.catch(() => {
-				// Discovery failed
-				store.setConnectionStatus("error")
-			})
-	}
-
-	/**
-	 * Subscribe to world state changes
-	 */
-	function subscribe(callback: (state: WorldState) => void): () => void {
-		return store.subscribe(callback)
-	}
-
-	/**
-	 * Get current world state snapshot
-	 */
-	async function getSnapshot(): Promise<WorldState> {
-		return store.getState()
-	}
-
-	/**
-	 * Async iterator for world state changes
-	 */
-	async function* asyncIterator(): AsyncIterableIterator<WorldState> {
-		// Yield current state immediately
-		yield store.getState()
-
-		// Then yield on every change
-		const queue: WorldState[] = []
-		let resolveNext: ((state: WorldState) => void) | null = null
-
-		const unsubscribe = store.subscribe((state) => {
-			if (resolveNext) {
-				resolveNext(state)
-				resolveNext = null
-			} else {
-				queue.push(state)
-			}
-		})
-
-		try {
-			while (true) {
-				if (queue.length > 0) {
-					yield queue.shift()!
-				} else {
-					// Wait for next state
-					const state = await new Promise<WorldState>((resolve) => {
-						resolveNext = resolve
-					})
-					yield state
-				}
-			}
-		} finally {
-			unsubscribe()
-		}
-	}
-
-	/**
-	 * Clean up resources
-	 */
-	async function dispose(): Promise<void> {
-		sse?.stop()
-	}
-
-	return {
-		subscribe,
-		getSnapshot,
-		[Symbol.asyncIterator]: asyncIterator,
-		dispose,
-	}
+	// Delegate to merged stream with empty sources array
+	// merged-stream.ts is the single source of truth for stream implementation
+	return createMergedWorldStream({ ...config, sources: [] })
 }
 
 // Re-export types for convenience
 export type { WorldState, WorldStreamConfig, WorldStreamHandle } from "./types.js"
-
-// Re-export discovery (Promise-based API)
-export { discoverServers } from "../discovery/server-discovery.js"
-export type { DiscoveredServer } from "../discovery/server-discovery.js"
