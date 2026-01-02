@@ -1,6 +1,5 @@
 ---
 "@opencode-vibe/core": minor
-"web": minor
 ---
 
 feat(api): add API proxy route for CORS-free mobile access

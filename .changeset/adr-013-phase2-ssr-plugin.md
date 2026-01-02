@@ -1,6 +1,5 @@
 ---
 "@opencode-vibe/react": minor
-"web": minor
 ---
 
 feat(react): implement SSR plugin for provider-free hooks (ADR-013 Phase 2)
