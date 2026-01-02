@@ -14,19 +14,10 @@
 
 "use client"
 
-import {
-	createContext,
-	useContext,
-	useCallback,
-	useEffect,
-	useRef,
-	useMemo,
-	type ReactNode,
-} from "react"
+import { createContext, useContext, useCallback, useEffect, useRef, type ReactNode } from "react"
 import { useOpencodeStore } from "../store"
 import type { GlobalEvent } from "../store/types"
 import { createClient } from "@opencode-vibe/core/client"
-import { createRouter, createCaller, createRoutes, type Caller } from "@opencode-vibe/core/router"
 import { useMultiServerSSE } from "../hooks/internal/use-multi-server-sse"
 import { fetchModelLimitsWithRetry, DEFAULT_MODEL_LIMITS } from "../lib/bootstrap"
 
@@ -42,8 +33,6 @@ export interface OpencodeContextValue {
 	ready: boolean
 	/** Sync a specific session (load messages, parts, etc) */
 	sync: (sessionID: string) => Promise<void>
-	/** Direct caller for invoking routes */
-	caller: Caller
 }
 
 const OpencodeContext = createContext<OpencodeContextValue | null>(null)
@@ -75,12 +64,6 @@ const getStoreActions = () => useOpencodeStore.getState()
 export function OpencodeProvider({ url, directory, children }: OpencodeProviderProps) {
 	// getClient returns a Promise since createClient is now async
 	const getClient = useCallback(() => createClient(directory), [directory])
-	const caller = useMemo(() => {
-		const router = createRouter(createRoutes())
-		// Type assertion needed: SDK client type doesn't match router's minimal interface exactly
-		// but is compatible at runtime. getClient() returns Promise, caller will await it.
-		return createCaller(router, { sdk: getClient() as any })
-	}, [getClient])
 
 	const bootstrapCalledRef = useRef(false)
 	const bootstrapRef = useRef<() => Promise<void>>(() => Promise.resolve())
@@ -303,7 +286,6 @@ export function OpencodeProvider({ url, directory, children }: OpencodeProviderP
 		directory,
 		ready,
 		sync,
-		caller,
 	}
 
 	return <OpencodeContext.Provider value={value}>{children}</OpencodeContext.Provider>
