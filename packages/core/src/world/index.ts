@@ -18,6 +18,8 @@ export {
 } from "./stream.js"
 export type { CatchUpResponse, DiscoverServers } from "./stream.js"
 export { WorldStore } from "./atoms.js"
+export { createSSEBridge } from "./sse-bridge.js"
+export type { SSEBridge } from "./sse-bridge.js"
 export type {
 	EnrichedMessage,
 	EnrichedSession,
@@ -35,3 +37,21 @@ export type { WorldEvent as WorldEventType } from "./events.js"
 // Cursor persistence (Effect Layer)
 export { CursorStore, CursorStoreLive } from "./cursor-store.js"
 export type { CursorStoreService } from "./cursor-store.js"
+
+// AtomRuntime with API services
+export { apiRuntimeAtom, MessageService, StatusService } from "./runtime.js"
+
+// effect-atom based state (Map-based for O(1) SSE updates)
+export {
+	sessionsAtom,
+	messagesAtom,
+	partsAtom,
+	statusAtom,
+	connectionStatusAtom,
+	sessionCountAtom,
+	Atom,
+	Registry,
+} from "./atoms.js"
+
+// Derived world atom (array-based for enrichment)
+export { worldAtom } from "./derived.js"

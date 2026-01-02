@@ -765,3 +765,264 @@ describe("WorldStore", () => {
 		})
 	})
 })
+
+/**
+ * effect-atom based atoms tests
+ *
+ * TDD: These tests define the behavior of the new effect-atom based state management
+ * that will eventually replace WorldStore.
+ */
+describe("effect-atom atoms", () => {
+	describe("sessionsAtom", () => {
+		it("can be read from Registry", async () => {
+			const { sessionsAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const sessions = registry.get(sessionsAtom)
+
+			expect(sessions).toBeInstanceOf(Map)
+			expect(sessions.size).toBe(0)
+		})
+
+		it("can be written via Registry", async () => {
+			const { sessionsAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+			const now = Date.now()
+
+			const session: Session = {
+				id: "ses-1",
+				title: "Test Session",
+				directory: "/test",
+				time: { created: now, updated: now },
+			}
+
+			const newMap = new Map<string, Session>()
+			newMap.set(session.id, session)
+
+			registry.set(sessionsAtom, newMap)
+			const result = registry.get(sessionsAtom)
+
+			expect(result.size).toBe(1)
+			expect(result.get("ses-1")).toEqual(session)
+		})
+	})
+
+	describe("messagesAtom", () => {
+		it("can be read from Registry", async () => {
+			const { messagesAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const messages = registry.get(messagesAtom)
+
+			expect(messages).toBeInstanceOf(Map)
+			expect(messages.size).toBe(0)
+		})
+
+		it("can be written via Registry with messages keyed by sessionId", async () => {
+			const { messagesAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+			const now = Date.now()
+
+			const message: Message = {
+				id: "msg-1",
+				sessionID: "ses-1",
+				role: "user",
+				time: { created: now },
+			}
+
+			const newMap = new Map<string, Message[]>()
+			newMap.set("ses-1", [message])
+
+			registry.set(messagesAtom, newMap)
+			const result = registry.get(messagesAtom)
+
+			expect(result.size).toBe(1)
+			expect(result.get("ses-1")).toHaveLength(1)
+			expect(result.get("ses-1")?.[0]).toEqual(message)
+		})
+	})
+
+	describe("partsAtom", () => {
+		it("can be read from Registry", async () => {
+			const { partsAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const parts = registry.get(partsAtom)
+
+			expect(parts).toBeInstanceOf(Map)
+			expect(parts.size).toBe(0)
+		})
+
+		it("can be written via Registry with parts keyed by messageId", async () => {
+			const { partsAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const part: Part = {
+				id: "part-1",
+				messageID: "msg-1",
+				type: "text",
+				content: "Hello",
+			}
+
+			const newMap = new Map<string, Part[]>()
+			newMap.set("msg-1", [part])
+
+			registry.set(partsAtom, newMap)
+			const result = registry.get(partsAtom)
+
+			expect(result.size).toBe(1)
+			expect(result.get("msg-1")).toHaveLength(1)
+			expect(result.get("msg-1")?.[0]).toEqual(part)
+		})
+	})
+
+	describe("statusAtom", () => {
+		it("can be read from Registry", async () => {
+			const { statusAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const status = registry.get(statusAtom)
+
+			expect(status).toBeInstanceOf(Map)
+			expect(status.size).toBe(0)
+		})
+
+		it("can be written via Registry with status keyed by sessionId", async () => {
+			const { statusAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const newMap = new Map<string, SessionStatus>()
+			newMap.set("ses-1", "running")
+			newMap.set("ses-2", "completed")
+
+			registry.set(statusAtom, newMap)
+			const result = registry.get(statusAtom)
+
+			expect(result.size).toBe(2)
+			expect(result.get("ses-1")).toBe("running")
+			expect(result.get("ses-2")).toBe("completed")
+		})
+	})
+
+	describe("connectionStatusAtom", () => {
+		it("can be read from Registry", async () => {
+			const { connectionStatusAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const status = registry.get(connectionStatusAtom)
+
+			expect(status).toBe("disconnected")
+		})
+
+		it("can be written via Registry", async () => {
+			const { connectionStatusAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			registry.set(connectionStatusAtom, "connected")
+			const result = registry.get(connectionStatusAtom)
+
+			expect(result).toBe("connected")
+		})
+
+		it("supports all connection states", async () => {
+			const { connectionStatusAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			const states: Array<"connecting" | "connected" | "disconnected" | "error"> = [
+				"connecting",
+				"connected",
+				"disconnected",
+				"error",
+			]
+
+			for (const state of states) {
+				registry.set(connectionStatusAtom, state)
+				expect(registry.get(connectionStatusAtom)).toBe(state)
+			}
+		})
+	})
+
+	describe("derived atoms", () => {
+		it("derived atom updates when base atom changes", async () => {
+			const { Atom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+
+			// Create base and derived atoms
+			const countAtom = Atom.make(0)
+			const doubleAtom = Atom.make((get) => get(countAtom) * 2)
+
+			// Initial state
+			expect(registry.get(countAtom)).toBe(0)
+			expect(registry.get(doubleAtom)).toBe(0)
+
+			// Update base atom
+			registry.set(countAtom, 5)
+
+			// Derived atom should auto-update
+			expect(registry.get(countAtom)).toBe(5)
+			expect(registry.get(doubleAtom)).toBe(10)
+		})
+
+		it("sessionCountAtom derives from sessionsAtom", async () => {
+			const { sessionsAtom, sessionCountAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+			const now = Date.now()
+
+			// Start with empty
+			expect(registry.get(sessionCountAtom)).toBe(0)
+
+			// Add sessions
+			const sessions = new Map<string, Session>()
+			sessions.set("ses-1", {
+				id: "ses-1",
+				title: "Test 1",
+				directory: "/test",
+				time: { created: now, updated: now },
+			})
+			sessions.set("ses-2", {
+				id: "ses-2",
+				title: "Test 2",
+				directory: "/test",
+				time: { created: now, updated: now },
+			})
+
+			registry.set(sessionsAtom, sessions)
+
+			// Derived atom should auto-update
+			expect(registry.get(sessionCountAtom)).toBe(2)
+		})
+	})
+
+	describe("Registry subscribe", () => {
+		it("notifies subscribers when atom changes", async () => {
+			const { sessionsAtom, Registry } = await import("./atoms.js")
+			const registry = Registry.make()
+			const now = Date.now()
+
+			let notifyCount = 0
+			let lastValue: Map<string, Session> | null = null
+
+			registry.subscribe(sessionsAtom, (value: Map<string, Session>) => {
+				notifyCount++
+				lastValue = value
+			})
+
+			// Make a change
+			const sessions = new Map<string, Session>()
+			sessions.set("ses-1", {
+				id: "ses-1",
+				title: "Test",
+				directory: "/test",
+				time: { created: now, updated: now },
+			})
+
+			registry.set(sessionsAtom, sessions)
+
+			// Should have notified
+			expect(notifyCount).toBe(1)
+			expect(lastValue).not.toBeNull()
+			expect(lastValue!.size).toBe(1)
+			expect(lastValue!.get("ses-1")?.title).toBe("Test")
+		})
+	})
+})

@@ -36,6 +36,7 @@
 		"type-check": "tsgo --noEmit"
 	},
 	"dependencies": {
+		"@effect-atom/atom-react": "^0.4.4",
 		"@opencode-vibe/core": "workspace:*",
 		"eventsource-parser": "^3.0.0",
 		"fuzzysort": "^3.0.0",

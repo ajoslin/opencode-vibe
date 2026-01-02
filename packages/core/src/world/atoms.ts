@@ -7,6 +7,8 @@
  * State holder with computed derived values. Subscribers get notified on changes.
  */
 
+import { Atom } from "@effect-atom/atom"
+import * as Registry from "@effect-atom/atom/Registry"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
 import type { EnrichedMessage, EnrichedSession, WorldState } from "./types.js"
@@ -274,3 +276,47 @@ export class WorldStore {
 		}
 	}
 }
+
+/**
+ * effect-atom based state atoms
+ *
+ * These atoms provide a reactive state management layer that will eventually
+ * replace the WorldStore class. They use effect-atom for fine-grained reactivity.
+ */
+
+/**
+ * Sessions atom - Map of session ID to Session
+ */
+export const sessionsAtom = Atom.make(new Map<string, Session>())
+
+/**
+ * Messages atom - Map of session ID to Message array
+ */
+export const messagesAtom = Atom.make(new Map<string, Message[]>())
+
+/**
+ * Parts atom - Map of message ID to Part array
+ */
+export const partsAtom = Atom.make(new Map<string, Part[]>())
+
+/**
+ * Status atom - Map of session ID to SessionStatus
+ */
+export const statusAtom = Atom.make(new Map<string, SessionStatus>())
+
+/**
+ * Connection status atom
+ */
+export const connectionStatusAtom = Atom.make<
+	"connecting" | "connected" | "disconnected" | "error"
+>("disconnected")
+
+/**
+ * Derived atom - session count
+ */
+export const sessionCountAtom = Atom.make((get) => get(sessionsAtom).size)
+
+/**
+ * Re-export Registry for convenience
+ */
+export { Atom, Registry }
