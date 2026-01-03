@@ -124,3 +124,9 @@ export {
 	type OpencodeSSRPluginProps,
 } from "./next-ssr-plugin"
 export { generateOpencodeHelpers, getOpencodeConfig } from "./factory"
+
+// World Stream Hooks (ADR-018: Reactive World Stream)
+export { useWorld } from "./hooks/use-world"
+export { useWorldConnection, type ConnectionStatus } from "./hooks/use-world-connection"
+export { useWorldMessages } from "./hooks/use-world-messages"
+export { useWorldSession } from "./hooks/use-world-session"

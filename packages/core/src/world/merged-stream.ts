@@ -19,7 +19,15 @@
 import { Effect, Stream, pipe, Scope, Exit } from "effect"
 import type { EventSource, SourceEvent } from "./event-source.js"
 import type { WorldStreamConfig, WorldStreamHandle, WorldState } from "./types.js"
-import { WorldStore } from "./atoms.js"
+import {
+	WorldStore,
+	Registry,
+	sessionsAtom,
+	messagesAtom,
+	partsAtom,
+	statusAtom,
+	worldStateAtom,
+} from "./atoms.js"
 import { WorldSSE } from "./sse.js"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
@@ -36,14 +44,14 @@ export interface MergedStreamConfig extends WorldStreamConfig {
 }
 
 /**
- * Route a SourceEvent to appropriate WorldStore method
+ * Route a SourceEvent to appropriate Registry atom update
  *
  * Pattern: lightweight bridge between event stream and state mutations.
- * Stateless router - WorldStore handles deduplication via binary search.
+ * Stateless router - Registry atoms handle updates with automatic invalidation.
  *
  * From Hivemind (mem-79f347f38521edd7): SSE-to-Store Bridge Pattern
  */
-function routeEventToStore(event: SourceEvent, store: WorldStore): void {
+function routeEventToRegistry(event: SourceEvent, registry: Registry.Registry): void {
 	const { type, data } = event
 
 	// Type guards prevent runtime errors from malformed events
@@ -52,7 +60,11 @@ function routeEventToStore(event: SourceEvent, store: WorldStore): void {
 		case "session.updated": {
 			const session = data as Session
 			if (session?.id) {
-				store.upsertSession(session)
+				// Upsert session in sessionsAtom (Map)
+				const sessions = registry.get(sessionsAtom)
+				const updated = new Map(sessions)
+				updated.set(session.id, session)
+				registry.set(sessionsAtom, updated)
 			}
 			break
 		}
@@ -61,11 +73,19 @@ function routeEventToStore(event: SourceEvent, store: WorldStore): void {
 		case "message.updated": {
 			const message = data as Message
 			if (message?.id) {
-				store.upsertMessage(message)
+				// Upsert message in messagesAtom (Map)
+				const messages = registry.get(messagesAtom)
+				const updated = new Map(messages)
+				updated.set(message.id, message)
+				registry.set(messagesAtom, updated)
+
 				// Receiving message events = session is active
 				// Mark as "running" since we're getting live data
 				if (message.sessionID) {
-					store.updateStatus(message.sessionID, "running")
+					const statuses = registry.get(statusAtom)
+					const updatedStatuses = new Map(statuses)
+					updatedStatuses.set(message.sessionID, "running")
+					registry.set(statusAtom, updatedStatuses)
 				}
 			}
 			break
@@ -80,12 +100,20 @@ function routeEventToStore(event: SourceEvent, store: WorldStore): void {
 				type === "message.part.updated" ? (data as { part?: Part }).part : (data as Part)
 
 			if (partData?.id) {
-				store.upsertPart(partData)
+				// Upsert part in partsAtom (Map)
+				const parts = registry.get(partsAtom)
+				const updated = new Map(parts)
+				updated.set(partData.id, partData)
+				registry.set(partsAtom, updated)
+
 				// Receiving part events = session is active
 				// Parts from SSE have sessionID directly
 				const sessionId = (partData as Part & { sessionID?: string }).sessionID
 				if (sessionId) {
-					store.updateStatus(sessionId, "running")
+					const statuses = registry.get(statusAtom)
+					const updatedStatuses = new Map(statuses)
+					updatedStatuses.set(sessionId, "running")
+					registry.set(statusAtom, updatedStatuses)
 				}
 			}
 			break
@@ -97,7 +125,10 @@ function routeEventToStore(event: SourceEvent, store: WorldStore): void {
 				status?: SessionStatus
 			}
 			if (sessionID && status) {
-				store.updateStatus(sessionID, status)
+				const statuses = registry.get(statusAtom)
+				const updated = new Map(statuses)
+				updated.set(sessionID, status)
+				registry.set(statusAtom, updated)
 			}
 			break
 		}
@@ -149,12 +180,12 @@ export interface MergedStreamHandle extends WorldStreamHandle {
 export function createMergedWorldStream(config: MergedStreamConfig = {}): MergedStreamHandle {
 	const { baseUrl, autoReconnect = true, onEvent, sources = [] } = config
 
-	const store = new WorldStore()
+	const registry = Registry.make()
 
 	// Create WorldSSE instance
 	// If baseUrl provided, connect to that specific server
 	// Otherwise, let WorldSSE use its built-in discovery loop to find and connect to ALL servers
-	const sse = new WorldSSE(store, {
+	const sse = new WorldSSE(registry, {
 		serverUrl: baseUrl, // undefined = use discovery loop for all servers
 		autoReconnect,
 		onEvent,
@@ -206,14 +237,14 @@ export function createMergedWorldStream(config: MergedStreamConfig = {}): Merged
 	 * Subscribe to world state changes
 	 */
 	function subscribe(callback: (state: WorldState) => void): () => void {
-		return store.subscribe(callback)
+		return registry.subscribe(worldStateAtom, callback)
 	}
 
 	/**
 	 * Get current world state snapshot
 	 */
 	async function getSnapshot(): Promise<WorldState> {
-		return store.getState()
+		return registry.get(worldStateAtom)
 	}
 
 	/**
@@ -225,7 +256,7 @@ export function createMergedWorldStream(config: MergedStreamConfig = {}): Merged
 	 */
 	async function* asyncIterator(): AsyncIterableIterator<WorldState> {
 		// Yield current state immediately
-		yield store.getState()
+		yield registry.get(worldStateAtom)
 
 		// Use Effect Scope + acquireRelease for subscription lifecycle
 		// This guarantees unsubscribe is called even if iterator is abandoned mid-stream
@@ -241,7 +272,7 @@ export function createMergedWorldStream(config: MergedStreamConfig = {}): Merged
 							const queue: WorldState[] = []
 							let resolveNext: ((state: WorldState) => void) | null = null
 
-							const unsubscribe = store.subscribe((state) => {
+							const unsubscribe = registry.subscribe(worldStateAtom, (state: WorldState) => {
 								if (resolveNext) {
 									// If iterator is waiting, resolve immediately
 									resolveNext(state)
@@ -308,7 +339,7 @@ export function createMergedWorldStream(config: MergedStreamConfig = {}): Merged
 			stream(),
 			Stream.runForEach((event) =>
 				Effect.sync(() => {
-					routeEventToStore(event, store)
+					routeEventToRegistry(event, registry)
 
 					// Call onEvent callback for all source events (not just SSE)
 					if (onEvent) {

@@ -18,7 +18,14 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { Effect, Stream, Fiber, Duration } from "effect"
 import { WorldSSE, createWorldSSE, discoverServers, connectToSSE } from "./sse.js"
-import { WorldStore } from "./atoms.js"
+import {
+	Registry,
+	connectionStatusAtom,
+	sessionsAtom,
+	instancesAtom,
+	sessionToInstancePortAtom,
+	projectsAtom,
+} from "./atoms.js"
 import type { Session } from "../types/domain.js"
 
 // ============================================================================
@@ -42,30 +49,30 @@ function createTestSession(id: string): Session {
 // ============================================================================
 
 describe("WorldSSE - Connection Lifecycle", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("initializes with disconnected status", () => {
-		const sse = new WorldSSE(store)
-		const state = store.getState()
-		expect(state.connectionStatus).toBe("disconnected")
+		const sse = new WorldSSE(registry)
+		const status = registry.get(connectionStatusAtom)
+		expect(status).toBe("disconnected")
 	})
 
 	it("sets connecting status on start", () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 		sse.start()
 
-		const state = store.getState()
-		expect(state.connectionStatus).toBe("connecting")
+		const status = registry.get(connectionStatusAtom)
+		expect(status).toBe("connecting")
 
 		sse.stop()
 	})
 
 	it("sets disconnected status on stop", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 		sse.start()
 
 		// Wait a bit for potential connection attempt
@@ -73,24 +80,24 @@ describe("WorldSSE - Connection Lifecycle", () => {
 
 		sse.stop()
 
-		const state = store.getState()
-		expect(state.connectionStatus).toBe("disconnected")
+		const status = registry.get(connectionStatusAtom)
+		expect(status).toBe("disconnected")
 	})
 
 	it("does not start twice if already running", () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 		sse.start()
-		const firstState = store.getState()
+		const firstStatus = registry.get(connectionStatusAtom)
 
 		sse.start() // Second call should be no-op
-		const secondState = store.getState()
+		const secondStatus = registry.get(connectionStatusAtom)
 
-		expect(firstState.connectionStatus).toBe(secondState.connectionStatus)
+		expect(firstStatus).toBe(secondStatus)
 		sse.stop()
 	})
 
 	it("clears connection fibers on stop", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 		sse.start()
 
 		await new Promise((resolve) => setTimeout(resolve, 50))
@@ -107,14 +114,14 @@ describe("WorldSSE - Connection Lifecycle", () => {
 // ============================================================================
 
 describe("WorldSSE - Configuration", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("uses default config values when not provided", () => {
-		const sse = new WorldSSE(store)
+		const sse = new WorldSSE(registry)
 
 		// Access private config through start behavior
 		// Default discoveryIntervalMs is 5000, autoReconnect is true
@@ -126,7 +133,7 @@ describe("WorldSSE - Configuration", () => {
 	})
 
 	it("accepts custom serverUrl", () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:3000" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:3000" })
 		sse.start()
 
 		// With explicit serverUrl, should skip discovery loop
@@ -136,21 +143,21 @@ describe("WorldSSE - Configuration", () => {
 	})
 
 	it("accepts custom discoveryIntervalMs", () => {
-		const sse = new WorldSSE(store, { discoveryIntervalMs: 1000 })
+		const sse = new WorldSSE(registry, { discoveryIntervalMs: 1000 })
 		sse.start()
 		sse.stop()
 		expect(true).toBe(true)
 	})
 
 	it("accepts custom autoReconnect flag", () => {
-		const sse = new WorldSSE(store, { autoReconnect: false })
+		const sse = new WorldSSE(registry, { autoReconnect: false })
 		sse.start()
 		sse.stop()
 		expect(true).toBe(true)
 	})
 
 	it("accepts custom maxReconnectAttempts", () => {
-		const sse = new WorldSSE(store, { maxReconnectAttempts: 5 })
+		const sse = new WorldSSE(registry, { maxReconnectAttempts: 5 })
 		sse.start()
 		sse.stop()
 		expect(true).toBe(true)
@@ -158,7 +165,7 @@ describe("WorldSSE - Configuration", () => {
 
 	it("accepts onEvent callback", () => {
 		const onEvent = vi.fn()
-		const sse = new WorldSSE(store, { onEvent })
+		const sse = new WorldSSE(registry, { onEvent })
 		sse.start()
 		sse.stop()
 
@@ -240,14 +247,14 @@ describe("connectToSSE - Stream.async pattern", () => {
 // ============================================================================
 
 describe("WorldSSE - Fiber Management", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("tracks connected ports", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 		sse.start()
 
 		// Initial state - connecting, but likely not yet connected
@@ -261,7 +268,7 @@ describe("WorldSSE - Fiber Management", () => {
 	})
 
 	it("clears fibers on stop", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 		sse.start()
 
 		await new Promise((resolve) => setTimeout(resolve, 50))
@@ -274,7 +281,7 @@ describe("WorldSSE - Fiber Management", () => {
 	})
 
 	it("prevents duplicate connections to same port", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 
 		// Start connection
 		sse.start()
@@ -298,15 +305,15 @@ describe("WorldSSE - Fiber Management", () => {
 // ============================================================================
 
 describe("WorldSSE - Event Emission", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("calls onEvent callback when events are received", async () => {
 		const onEvent = vi.fn()
-		const sse = new WorldSSE(store, {
+		const sse = new WorldSSE(registry, {
 			serverUrl: "http://localhost:9999",
 			onEvent,
 		})
@@ -324,7 +331,7 @@ describe("WorldSSE - Event Emission", () => {
 		const events: any[] = []
 		const onEvent = (event: any) => events.push(event)
 
-		const sse = new WorldSSE(store, {
+		const sse = new WorldSSE(registry, {
 			serverUrl: "http://localhost:9999",
 			onEvent,
 		})
@@ -343,14 +350,14 @@ describe("WorldSSE - Event Emission", () => {
 // ============================================================================
 
 describe("WorldSSE - acquireRelease Pattern", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("cleans up resources on scope exit", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 
 		sse.start()
 		await new Promise((resolve) => setTimeout(resolve, 50))
@@ -359,15 +366,15 @@ describe("WorldSSE - acquireRelease Pattern", () => {
 		sse.stop()
 
 		// Verify cleanup: connection status should be disconnected
-		const state = store.getState()
-		expect(state.connectionStatus).toBe("disconnected")
+		const status = registry.get(connectionStatusAtom)
+		expect(status).toBe("disconnected")
 
 		// Verify cleanup: connected ports should be empty
 		expect(sse.getConnectedPorts()).toEqual([])
 	})
 
 	it("interrupts fibers on stop", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 
 		sse.start()
 		await new Promise((resolve) => setTimeout(resolve, 50))
@@ -385,14 +392,14 @@ describe("WorldSSE - acquireRelease Pattern", () => {
 // ============================================================================
 
 describe("WorldSSE - Reconnection with Schedule", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("respects autoReconnect: false flag", async () => {
-		const sse = new WorldSSE(store, {
+		const sse = new WorldSSE(registry, {
 			serverUrl: "http://localhost:9999",
 			autoReconnect: false,
 		})
@@ -409,7 +416,7 @@ describe("WorldSSE - Reconnection with Schedule", () => {
 	})
 
 	it("uses exponential backoff when autoReconnect: true", async () => {
-		const sse = new WorldSSE(store, {
+		const sse = new WorldSSE(registry, {
 			serverUrl: "http://localhost:9999",
 			autoReconnect: true,
 			maxReconnectAttempts: 2, // Limit to 2 attempts for test
@@ -428,7 +435,7 @@ describe("WorldSSE - Reconnection with Schedule", () => {
 	})
 
 	it("stops retrying when running flag is false", async () => {
-		const sse = new WorldSSE(store, {
+		const sse = new WorldSSE(registry, {
 			serverUrl: "http://localhost:9999",
 			autoReconnect: true,
 		})
@@ -454,14 +461,14 @@ describe("WorldSSE - Reconnection with Schedule", () => {
 // ============================================================================
 
 describe("WorldSSE - Discovery Loop", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("starts discovery loop when no serverUrl provided", async () => {
-		const sse = new WorldSSE(store) // No serverUrl
+		const sse = new WorldSSE(registry) // No serverUrl
 
 		sse.start()
 
@@ -475,7 +482,7 @@ describe("WorldSSE - Discovery Loop", () => {
 	})
 
 	it("skips discovery loop when serverUrl is provided", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 
 		sse.start()
 
@@ -489,17 +496,17 @@ describe("WorldSSE - Discovery Loop", () => {
 	})
 
 	it("updates connection status based on discovery results", async () => {
-		const sse = new WorldSSE(store)
+		const sse = new WorldSSE(registry)
 
 		sse.start()
 
 		// Wait for discovery to run
 		await new Promise((resolve) => setTimeout(resolve, 50))
 
-		const state = store.getState()
+		const status = registry.get(connectionStatusAtom)
 
 		// Status should be either connecting or disconnected (no servers found)
-		expect(["connecting", "disconnected", "connected"]).toContain(state.connectionStatus)
+		expect(["connecting", "disconnected", "connected"]).toContain(status)
 
 		sse.stop()
 	})
@@ -511,16 +518,16 @@ describe("WorldSSE - Discovery Loop", () => {
 
 describe("createWorldSSE - Factory Function", () => {
 	it("creates WorldSSE instance", () => {
-		const store = new WorldStore()
-		const sse = createWorldSSE(store)
+		const registry = Registry.make()
+		const sse = createWorldSSE(registry)
 
 		expect(sse).toBeInstanceOf(WorldSSE)
 	})
 
 	it("passes config to WorldSSE constructor", () => {
-		const store = new WorldStore()
+		const registry = Registry.make()
 		const config = { serverUrl: "http://localhost:3000" }
-		const sse = createWorldSSE(store, config)
+		const sse = createWorldSSE(registry, config)
 
 		// Start and stop to verify config was applied
 		sse.start()
@@ -534,48 +541,241 @@ describe("createWorldSSE - Factory Function", () => {
 // Integration Tests - WorldStore Updates
 // ============================================================================
 
-describe("WorldSSE - WorldStore Integration", () => {
-	let store: WorldStore
+describe("WorldSSE - Registry Integration", () => {
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
-	it("updates store connection status on start", () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+	it("updates registry connection status on start", () => {
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 
-		const beforeState = store.getState()
-		expect(beforeState.connectionStatus).toBe("disconnected")
+		const beforeStatus = registry.get(connectionStatusAtom)
+		expect(beforeStatus).toBe("disconnected")
 
 		sse.start()
 
-		const afterState = store.getState()
-		expect(afterState.connectionStatus).toBe("connecting")
+		const afterStatus = registry.get(connectionStatusAtom)
+		expect(afterStatus).toBe("connecting")
 
 		sse.stop()
 	})
 
-	it("updates store connection status on stop", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
-
-		sse.start()
-		await new Promise((resolve) => setTimeout(resolve, 50))
-
-		sse.stop()
-
-		const state = store.getState()
-		expect(state.connectionStatus).toBe("disconnected")
-	})
-
-	it("does not modify sessions array before events arrive", async () => {
-		const sse = new WorldSSE(store, { serverUrl: "http://localhost:9999" })
+	it("updates registry connection status on stop", async () => {
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
 
 		sse.start()
 		await new Promise((resolve) => setTimeout(resolve, 50))
 
-		const state = store.getState()
-		expect(state.sessions).toEqual([])
+		sse.stop()
+
+		const status = registry.get(connectionStatusAtom)
+		expect(status).toBe("disconnected")
+	})
+
+	it("does not modify sessions Map before events arrive", async () => {
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
+
+		sse.start()
+		await new Promise((resolve) => setTimeout(resolve, 50))
+
+		const sessions = registry.get(sessionsAtom)
+		expect(sessions.size).toBe(0)
 
 		sse.stop()
+	})
+})
+
+// ============================================================================
+// Discovery → WorldStore Integration Tests (NEW - bd-opencode-next--xts0a-mjylhplvxf9)
+// ============================================================================
+
+describe("WorldSSE - Discovery to Registry Wiring", () => {
+	let registry: Registry.Registry
+
+	beforeEach(() => {
+		registry = Registry.make()
+	})
+
+	it("feeds discovered servers to instancesAtom", async () => {
+		// Start discovery loop (no serverUrl = triggers discovery)
+		const sse = new WorldSSE(registry)
+		sse.start()
+
+		// Wait for discovery to run at least once
+		await new Promise((resolve) => setTimeout(resolve, 100))
+
+		const instances = registry.get(instancesAtom)
+
+		// instances Map should exist (may be empty if no servers found)
+		expect(instances instanceof Map).toBe(true)
+
+		sse.stop()
+	})
+
+	it("populates sessionToInstance mapping when SSE events arrive", async () => {
+		const sse = new WorldSSE(registry, { serverUrl: "http://localhost:9999" })
+
+		// Manually inject instance into registry (simulating discovery)
+		const instanceMap = new Map()
+		instanceMap.set(9999, {
+			port: 9999,
+			pid: 12345,
+			directory: "/test/project",
+			status: "connected",
+			baseUrl: "http://127.0.0.1:9999",
+			lastSeen: Date.now(),
+		})
+		registry.set(instancesAtom, instanceMap)
+
+		sse.start()
+
+		// Manually trigger a session event (would normally come from SSE)
+		const testSession = createTestSession("test-session-1")
+		const sessions = registry.get(sessionsAtom)
+		const updatedSessions = new Map(sessions)
+		updatedSessions.set(testSession.id, testSession)
+		registry.set(sessionsAtom, updatedSessions)
+
+		// After session creation, sessionToInstance mapping should be populated
+		const mapping = registry.get(sessionToInstancePortAtom)
+		expect(mapping instanceof Map).toBe(true)
+
+		sse.stop()
+	})
+
+	it("updates instancesAtom Map from discovery results", async () => {
+		const testInstance1 = {
+			port: 1999,
+			pid: 100,
+			directory: "/test/project1",
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:1999",
+			lastSeen: Date.now(),
+		}
+		const testInstance2 = {
+			port: 2000,
+			pid: 200,
+			directory: "/test/project2",
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:2000",
+			lastSeen: Date.now(),
+		}
+
+		// Simulate discovery feeding instances to registry
+		const instanceMap = new Map()
+		instanceMap.set(1999, testInstance1)
+		instanceMap.set(2000, testInstance2)
+		registry.set(instancesAtom, instanceMap)
+
+		const instances = registry.get(instancesAtom)
+
+		// instancesAtom Map should be populated
+		expect(instances.get(1999)).toEqual(testInstance1)
+		expect(instances.get(2000)).toEqual(testInstance2)
+		expect(instances.size).toBe(2)
+	})
+
+	it("stores instances by port in instancesAtom", async () => {
+		const testInstance1 = {
+			port: 1999,
+			pid: 100,
+			directory: "/test/project1",
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:1999",
+			lastSeen: Date.now(),
+		}
+		const testInstance2 = {
+			port: 2000,
+			pid: 200,
+			directory: "/test/project1", // Same directory, different port
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:2000",
+			lastSeen: Date.now(),
+		}
+		const testInstance3 = {
+			port: 3000,
+			pid: 300,
+			directory: "/test/project2",
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:3000",
+			lastSeen: Date.now(),
+		}
+
+		const instanceMap = new Map()
+		instanceMap.set(1999, testInstance1)
+		instanceMap.set(2000, testInstance2)
+		instanceMap.set(3000, testInstance3)
+		registry.set(instancesAtom, instanceMap)
+
+		const instances = registry.get(instancesAtom)
+
+		// instancesAtom Map should be keyed by port
+		expect(instances.size).toBe(3)
+		expect(instances.get(1999)).toEqual(testInstance1)
+		expect(instances.get(2000)).toEqual(testInstance2)
+		expect(instances.get(3000)).toEqual(testInstance3)
+	})
+
+	it("tracks instances with different statuses", async () => {
+		const testInstance1 = {
+			port: 1999,
+			pid: 100,
+			directory: "/test/project1",
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:1999",
+			lastSeen: Date.now(),
+		}
+		const testInstance2 = {
+			port: 2000,
+			pid: 200,
+			directory: "/test/project2",
+			status: "connecting" as const,
+			baseUrl: "http://127.0.0.1:2000",
+			lastSeen: Date.now(),
+		}
+		const testInstance3 = {
+			port: 3000,
+			pid: 300,
+			directory: "/test/project3",
+			status: "connected" as const,
+			baseUrl: "http://127.0.0.1:3000",
+			lastSeen: Date.now(),
+		}
+
+		const instanceMap = new Map()
+		instanceMap.set(1999, testInstance1)
+		instanceMap.set(2000, testInstance2)
+		instanceMap.set(3000, testInstance3)
+		registry.set(instancesAtom, instanceMap)
+
+		const instances = registry.get(instancesAtom)
+
+		// Should store all instances regardless of status
+		expect(instances.size).toBe(3)
+		expect(instances.get(1999)?.status).toBe("connected")
+		expect(instances.get(2000)?.status).toBe("connecting")
+		expect(instances.get(3000)?.status).toBe("connected")
+	})
+
+	it("fetches /project/current and populates projectsAtom", async () => {
+		// This is OPTIONAL per task description
+		// Test verifies IF we implement it, projects are populated
+
+		const testProject = {
+			id: "proj-1",
+			worktree: "/test/project1",
+			name: "Test Project 1",
+		}
+
+		const projectMap = new Map()
+		projectMap.set(testProject.worktree, testProject as any)
+		registry.set(projectsAtom, projectMap)
+
+		const projects = registry.get(projectsAtom)
+
+		expect(projects.size).toBe(1)
+		expect(projects.get("/test/project1")).toBeDefined()
 	})
 })

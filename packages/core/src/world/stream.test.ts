@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { createWorldStream } from "./stream.js"
-import { WorldStore } from "./atoms.js"
+import { connectionStatusAtom, WorldStore } from "./atoms.js"
 
 // Mock discovery module
 const mockDiscoverServers = vi.fn()
@@ -15,22 +15,23 @@ vi.mock("../discovery/server-discovery.js", () => ({
 	discoverServers: mockDiscoverServers,
 }))
 
-// Mock the WorldSSE class
-vi.mock("./sse.js", () => {
+// Mock the WorldSSE class - uses Registry now, not WorldStore
+vi.mock("./sse.js", async () => {
+	const atoms = await import("./atoms.js")
 	return {
 		WorldSSE: class MockWorldSSE {
-			private store: any
+			private registry: any
 			private config: any
-			constructor(store: any, config: any) {
-				this.store = store
+			constructor(registry: any, config: any) {
+				this.registry = registry
 				this.config = config
 			}
 			start() {
-				// Simulate bootstrap completing
-				this.store.setConnectionStatus("connected")
+				// Simulate bootstrap completing - use Registry pattern
+				this.registry.set(atoms.connectionStatusAtom, "connected")
 			}
 			stop() {
-				this.store.setConnectionStatus("disconnected")
+				this.registry.set(atoms.connectionStatusAtom, "disconnected")
 			}
 			getConnectedPorts() {
 				return []

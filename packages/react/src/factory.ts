@@ -988,8 +988,10 @@ export function generateOpencodeHelpers<TRouter = any>(config?: OpencodeConfig) 
 				console.log("[useSSEEvents] Received event for", event.directory, ":", event.payload.type)
 
 				// Route to store (getState() for stable reference)
+				// Type cast: SSE event payload is SDK Event at runtime, but typed as generic object
 				useOpencodeStore.getState().handleSSEEvent({
 					directory: event.directory,
+					// @ts-expect-error - SSE event payload has correct shape but generic type
 					payload: event.payload,
 				})
 			})

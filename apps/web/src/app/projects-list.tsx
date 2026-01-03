@@ -20,7 +20,7 @@ import {
 import { SSEDebugPanel } from "@/components/sse-debug-panel"
 
 // Session status type (extracted from SSE event payload)
-type SessionStatusValue = "running" | "pending" | "completed" | "error"
+type SessionStatusValue = "running" | "pending" | "completed" | "error" | "idle"
 
 interface Project {
 	id: string

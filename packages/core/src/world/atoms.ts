@@ -12,7 +12,8 @@ import * as Registry from "@effect-atom/atom/Registry"
 import { Effect, Metric, Context, Layer } from "effect"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
-import type { EnrichedMessage, EnrichedSession, WorldState } from "./types.js"
+import type { Project } from "../types/sdk.js"
+import type { EnrichedMessage, EnrichedSession, WorldState, Instance } from "./types.js"
 import { WorldMetrics } from "./metrics.js"
 
 /**
@@ -24,6 +25,9 @@ interface WorldStateData {
 	parts: Part[]
 	status: Record<string, SessionStatus>
 	connectionStatus: "connecting" | "connected" | "disconnected" | "error"
+	instances: Instance[]
+	projects: Project[]
+	sessionToInstancePort: Record<string, number>
 }
 
 /**
@@ -41,6 +45,9 @@ export class WorldStore {
 		parts: [],
 		status: {},
 		connectionStatus: "disconnected",
+		instances: [],
+		projects: [],
+		sessionToInstancePort: {},
 	}
 
 	private subscribers = new Set<WorldSubscriber>()
@@ -163,6 +170,104 @@ export class WorldStore {
 			return this.data.messages[index].sessionID
 		}
 		return undefined
+	}
+
+	/**
+	 * Update instances (bulk)
+	 */
+	setInstances(instances: Instance[]): void {
+		this.data.instances = instances
+		this.notify()
+	}
+
+	/**
+	 * Update projects (bulk)
+	 */
+	setProjects(projects: Project[]): void {
+		this.data.projects = projects
+		this.notify()
+	}
+
+	/**
+	 * Map session to instance for routing
+	 */
+	setSessionToInstance(sessionId: string, instance: Instance): void {
+		this.data.sessionToInstancePort = {
+			...this.data.sessionToInstancePort,
+			[sessionId]: instance.port,
+		}
+		this.notify()
+	}
+
+	/**
+	 * Upsert instance by port using binary search for O(log n) updates
+	 */
+	upsertInstance(instance: Instance): void {
+		const index = this.binarySearchByPort(this.data.instances, instance.port)
+		if (index >= 0) {
+			// Update existing
+			this.data.instances[index] = instance
+		} else {
+			// Insert at correct position to maintain sort by port
+			const insertIndex = -(index + 1)
+			this.data.instances.splice(insertIndex, 0, instance)
+		}
+		this.notify()
+	}
+
+	/**
+	 * Update instance status by port
+	 */
+	updateInstanceStatus(port: number, status: Instance["status"]): void {
+		const index = this.binarySearchByPort(this.data.instances, port)
+		if (index >= 0) {
+			this.data.instances[index] = {
+				...this.data.instances[index],
+				status,
+			}
+			this.notify()
+		}
+	}
+
+	/**
+	 * Remove instance by port
+	 */
+	removeInstance(port: number): void {
+		const index = this.binarySearchByPort(this.data.instances, port)
+		if (index >= 0) {
+			this.data.instances.splice(index, 1)
+			this.notify()
+		}
+	}
+
+	/**
+	 * Binary search for instance by port in sorted array
+	 * @returns Index if found, or negative insertion point - 1 if not found
+	 */
+	private binarySearchByPort(array: Instance[], port: number): number {
+		// Increment binary search counter
+		Effect.runSync(Metric.increment(WorldMetrics.binarySearchTotal))
+
+		let left = 0
+		let right = array.length - 1
+
+		while (left <= right) {
+			const mid = Math.floor((left + right) / 2)
+			const midPort = array[mid].port
+
+			if (midPort === port) {
+				return mid
+			}
+
+			if (midPort < port) {
+				left = mid + 1
+			} else {
+				right = mid - 1
+			}
+		}
+
+		// Not found - return negative insertion point - 1
+		return -(left + 1)
 	}
 
 	/**
@@ -332,6 +437,60 @@ export class WorldStore {
 			streaming: enrichedSessions.filter((s) => s.messages.some((m) => m.isStreaming)).length,
 		}
 
+		// Build instance maps
+		const instanceByPort = new Map<number, Instance>()
+		for (const instance of data.instances) {
+			instanceByPort.set(instance.port, instance)
+		}
+
+		const instancesByDirectory = new Map<string, Instance[]>()
+		for (const instance of data.instances) {
+			const existing = instancesByDirectory.get(instance.directory) ?? []
+			existing.push(instance)
+			instancesByDirectory.set(instance.directory, existing)
+		}
+
+		const connectedInstanceCount = data.instances.filter((i) => i.status === "connected").length
+
+		// Build sessionToInstance map from sessionToInstancePort
+		const sessionToInstance = new Map<string, Instance>()
+		for (const [sessionId, port] of Object.entries(data.sessionToInstancePort)) {
+			const instance = instanceByPort.get(port)
+			if (instance) {
+				sessionToInstance.set(sessionId, instance)
+			}
+		}
+
+		// Enrich projects with instances and sessions
+		const enrichedProjects = data.projects.map((project) => {
+			// Use worktree from SDK Project type
+			const projectInstances = instancesByDirectory.get(project.worktree) ?? []
+			const projectSessions = byDirectory.get(project.worktree) ?? []
+
+			const activeInstanceCount = projectInstances.filter((i) => i.status === "connected").length
+			const sessionCount = projectSessions.length
+			const activeSessionCount = projectSessions.filter((s) => s.isActive).length
+
+			// Last activity is most recent session activity or 0
+			const lastActivityAt =
+				projectSessions.length > 0 ? Math.max(...projectSessions.map((s) => s.lastActivityAt)) : 0
+
+			return {
+				...project,
+				instances: projectInstances,
+				activeInstanceCount,
+				sessions: projectSessions,
+				sessionCount,
+				activeSessionCount,
+				lastActivityAt,
+			}
+		})
+
+		const projectByDirectory = new Map<string, (typeof enrichedProjects)[0]>()
+		for (const project of enrichedProjects) {
+			projectByDirectory.set(project.worktree, project)
+		}
+
 		const worldState = {
 			sessions: enrichedSessions,
 			activeSessionCount,
@@ -340,6 +499,13 @@ export class WorldStore {
 			lastUpdated: Date.now(),
 			byDirectory,
 			stats,
+			instances: data.instances,
+			instanceByPort,
+			instancesByDirectory,
+			connectedInstanceCount,
+			projects: enrichedProjects,
+			projectByDirectory,
+			sessionToInstance,
 		}
 
 		// Update metrics after derivation completes
@@ -500,24 +666,24 @@ export const WorldStoreServiceLive: Layer.Layer<WorldStoreService, never, never>
 /**
  * effect-atom based state atoms
  *
- * These atoms provide a reactive state management layer that will eventually
- * replace the WorldStore class. They use effect-atom for fine-grained reactivity.
+ * Pure effect-atom primitives that replace WorldStore class.
+ * Uses Registry.set() for auto-invalidation (no manual notify()).
  */
 
 /**
- * Sessions atom - Map of session ID to Session
+ * Sessions atom - Map for O(1) lookup by session ID
  */
 export const sessionsAtom = Atom.make(new Map<string, Session>())
 
 /**
- * Messages atom - Map of session ID to Message array
+ * Messages atom - Map of message ID to Message
  */
-export const messagesAtom = Atom.make(new Map<string, Message[]>())
+export const messagesAtom = Atom.make(new Map<string, Message>())
 
 /**
- * Parts atom - Map of message ID to Part array
+ * Parts atom - Map of part ID to Part
  */
-export const partsAtom = Atom.make(new Map<string, Part[]>())
+export const partsAtom = Atom.make(new Map<string, Part>())
 
 /**
  * Status atom - Map of session ID to SessionStatus
@@ -532,9 +698,260 @@ export const connectionStatusAtom = Atom.make<
 >("disconnected")
 
 /**
+ * Instances atom - Map of port to Instance
+ */
+export const instancesAtom = Atom.make(new Map<number, Instance>())
+
+/**
+ * Projects atom - Map of worktree path to Project
+ */
+export const projectsAtom = Atom.make(new Map<string, Project>())
+
+/**
+ * Session to instance port mapping for routing
+ */
+export const sessionToInstancePortAtom = Atom.make(new Map<string, number>())
+
+/**
  * Derived atom - session count
  */
 export const sessionCountAtom = Atom.make((get) => get(sessionsAtom).size)
+
+/**
+ * Derived atom - computes enriched WorldState from primitive atoms
+ *
+ * Auto-invalidates when any dependency atom changes (no manual notify()).
+ * Converts Maps to arrays for deriveWorldStateFromData.
+ */
+export const worldStateAtom = Atom.make((get) => {
+	const data: WorldStateData = {
+		sessions: Array.from(get(sessionsAtom).values()),
+		messages: Array.from(get(messagesAtom).values()),
+		parts: Array.from(get(partsAtom).values()),
+		status: Object.fromEntries(get(statusAtom)),
+		connectionStatus: get(connectionStatusAtom),
+		instances: Array.from(get(instancesAtom).values()),
+		projects: Array.from(get(projectsAtom).values()),
+		sessionToInstancePort: Object.fromEntries(get(sessionToInstancePortAtom)),
+	}
+
+	// Reuse WorldStore.deriveWorldState() logic
+	// NOTE: This duplicates the derivation logic temporarily.
+	// Once WorldStore is deleted, we can extract this as a pure function.
+	return deriveWorldStateFromData(data)
+})
+
+/**
+ * Pure function: derive WorldState from WorldStateData
+ *
+ * Extracted from WorldStore.deriveWorldState() for reuse with atoms.
+ * This is the SAME logic, ensuring behavioral equivalence.
+ */
+function deriveWorldStateFromData(data: WorldStateData): WorldState {
+	// Log derivation start with input counts
+	Effect.runSync(
+		Effect.logDebug("World state derivation started").pipe(
+			Effect.annotateLogs({
+				sessionCount: data.sessions.length,
+				messageCount: data.messages.length,
+				partCount: data.parts.length,
+			}),
+		),
+	)
+
+	// Build message ID -> parts map
+	const partsByMessage = new Map<string, Part[]>()
+	for (const part of data.parts) {
+		const existing = partsByMessage.get(part.messageID) ?? []
+		existing.push(part)
+		partsByMessage.set(part.messageID, existing)
+	}
+
+	Effect.runSync(
+		Effect.logDebug("Parts indexed by message").pipe(
+			Effect.annotateLogs({
+				messageCount: partsByMessage.size,
+			}),
+		),
+	)
+
+	// Build session ID -> messages map
+	const messagesBySession = new Map<string, EnrichedMessage[]>()
+	for (const msg of data.messages) {
+		const msgParts = partsByMessage.get(msg.id) ?? []
+		const enrichedMsg: EnrichedMessage = {
+			...msg,
+			parts: msgParts,
+			// Message is streaming if it's assistant role and has no completed time
+			isStreaming: msg.role === "assistant" && !msg.time?.completed,
+		}
+
+		const existing = messagesBySession.get(msg.sessionID) ?? []
+		existing.push(enrichedMsg)
+		messagesBySession.set(msg.sessionID, existing)
+	}
+
+	Effect.runSync(
+		Effect.logDebug("Messages indexed by session").pipe(
+			Effect.annotateLogs({
+				sessionCount: messagesBySession.size,
+				totalMessages: data.messages.length,
+			}),
+		),
+	)
+
+	// Build enriched sessions
+	const enrichedSessions: EnrichedSession[] = data.sessions.map((session) => {
+		const sessionMessages = messagesBySession.get(session.id) ?? []
+		const sessionStatus = data.status[session.id] ?? "completed"
+		const isActive = sessionStatus === "running"
+
+		// Last activity is most recent message or session update
+		const lastMessageTime =
+			sessionMessages.length > 0 ? Math.max(...sessionMessages.map((m) => m.time?.created ?? 0)) : 0
+		const lastActivityAt = Math.max(lastMessageTime, session.time.updated)
+
+		// Context usage percent - compute from last assistant message tokens
+		// Total tokens = input + output + reasoning + cache.read + cache.write
+		let contextUsagePercent = 0
+		for (let i = sessionMessages.length - 1; i >= 0; i--) {
+			const msg = sessionMessages[i]
+			if (msg.role === "assistant" && msg.tokens && msg.model?.limits?.context) {
+				const totalTokens =
+					msg.tokens.input +
+					msg.tokens.output +
+					(msg.tokens.reasoning ?? 0) +
+					(msg.tokens.cache?.read ?? 0) +
+					(msg.tokens.cache?.write ?? 0)
+				contextUsagePercent = (totalTokens / msg.model.limits.context) * 100
+				break
+			}
+		}
+
+		return {
+			...session,
+			status: sessionStatus,
+			isActive,
+			messages: sessionMessages,
+			unreadCount: 0, // TODO: implement unread tracking
+			contextUsagePercent,
+			lastActivityAt,
+		}
+	})
+
+	// Sort sessions by last activity (most recent first)
+	enrichedSessions.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+
+	// Active session is the most recently active one
+	const activeSession = enrichedSessions.find((s) => s.isActive) ?? enrichedSessions[0] ?? null
+	const activeSessionCount = enrichedSessions.filter((s) => s.isActive).length
+
+	// Group sessions by directory
+	const byDirectory = new Map<string, EnrichedSession[]>()
+	for (const session of enrichedSessions) {
+		const existing = byDirectory.get(session.directory) ?? []
+		existing.push(session)
+		byDirectory.set(session.directory, existing)
+	}
+
+	// Compute stats
+	const stats = {
+		total: enrichedSessions.length,
+		active: activeSessionCount,
+		streaming: enrichedSessions.filter((s) => s.messages.some((m) => m.isStreaming)).length,
+	}
+
+	// Build instance maps
+	const instanceByPort = new Map<number, Instance>()
+	for (const instance of data.instances) {
+		instanceByPort.set(instance.port, instance)
+	}
+
+	const instancesByDirectory = new Map<string, Instance[]>()
+	for (const instance of data.instances) {
+		const existing = instancesByDirectory.get(instance.directory) ?? []
+		existing.push(instance)
+		instancesByDirectory.set(instance.directory, existing)
+	}
+
+	const connectedInstanceCount = data.instances.filter((i) => i.status === "connected").length
+
+	// Build sessionToInstance map from sessionToInstancePort
+	const sessionToInstance = new Map<string, Instance>()
+	for (const [sessionId, port] of Object.entries(data.sessionToInstancePort)) {
+		const instance = instanceByPort.get(port)
+		if (instance) {
+			sessionToInstance.set(sessionId, instance)
+		}
+	}
+
+	// Enrich projects with instances and sessions
+	const enrichedProjects = data.projects.map((project) => {
+		// Use worktree from SDK Project type
+		const projectInstances = instancesByDirectory.get(project.worktree) ?? []
+		const projectSessions = byDirectory.get(project.worktree) ?? []
+
+		const activeInstanceCount = projectInstances.filter((i) => i.status === "connected").length
+		const sessionCount = projectSessions.length
+		const activeSessionCount = projectSessions.filter((s) => s.isActive).length
+
+		// Last activity is most recent session activity or 0
+		const lastActivityAt =
+			projectSessions.length > 0 ? Math.max(...projectSessions.map((s) => s.lastActivityAt)) : 0
+
+		return {
+			...project,
+			instances: projectInstances,
+			activeInstanceCount,
+			sessions: projectSessions,
+			sessionCount,
+			activeSessionCount,
+			lastActivityAt,
+		}
+	})
+
+	const projectByDirectory = new Map<string, (typeof enrichedProjects)[0]>()
+	for (const project of enrichedProjects) {
+		projectByDirectory.set(project.worktree, project)
+	}
+
+	const worldState = {
+		sessions: enrichedSessions,
+		activeSessionCount,
+		activeSession,
+		connectionStatus: data.connectionStatus,
+		lastUpdated: Date.now(),
+		byDirectory,
+		stats,
+		instances: data.instances,
+		instanceByPort,
+		instancesByDirectory,
+		connectedInstanceCount,
+		projects: enrichedProjects,
+		projectByDirectory,
+		sessionToInstance,
+	}
+
+	// Update metrics after derivation completes
+	Effect.runSync(
+		Effect.all([
+			Metric.set(WorldMetrics.worldSessionsTotal, stats.total),
+			Metric.set(WorldMetrics.worldSessionsActive, stats.active),
+		]).pipe(
+			Effect.tap(() =>
+				Effect.logDebug("World state derivation completed").pipe(
+					Effect.annotateLogs({
+						totalSessions: stats.total,
+						activeSessions: stats.active,
+						streamingSessions: stats.streaming,
+					}),
+				),
+			),
+		),
+	)
+
+	return worldState
+}
 
 /**
  * Re-export Registry for convenience

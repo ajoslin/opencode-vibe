@@ -67,6 +67,14 @@
 		"./world": {
 			"types": "./dist/world/index.d.ts",
 			"import": "./dist/world/index.js"
+		},
+		"./world/stream": {
+			"types": "./dist/world/stream.d.ts",
+			"import": "./dist/world/stream.js"
+		},
+		"./world/types": {
+			"types": "./dist/world/types.d.ts",
+			"import": "./dist/world/types.js"
 		}
 	},
 	"files": [

@@ -27,9 +27,21 @@ import { createParser, type EventSourceParser } from "eventsource-parser"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
 import { normalizeBackendStatus, type BackendSessionStatus } from "../types/sessions.js"
-import { WorldStore } from "./atoms.js"
-import type { SSEEventInfo } from "./types.js"
+import {
+	WorldStore,
+	Registry,
+	sessionsAtom,
+	messagesAtom,
+	partsAtom,
+	statusAtom,
+	connectionStatusAtom,
+	instancesAtom,
+	projectsAtom,
+	sessionToInstancePortAtom,
+} from "./atoms.js"
+import type { SSEEventInfo, Instance } from "./types.js"
 import { WorldMetrics } from "./metrics.js"
+import type { Project } from "../types/sdk.js"
 
 // ============================================================================
 // Types
@@ -60,20 +72,81 @@ export interface WorldSSEConfig {
 }
 
 // ============================================================================
-// Discovery - lsof based, works in CLI and server contexts
+// Environment Detection
 // ============================================================================
 
 /**
- * Discover running OpenCode servers via lsof
+ * Check if running in browser context
+ */
+function isBrowser(): boolean {
+	return typeof window !== "undefined"
+}
+
+/**
+ * Get SSE URL for a port
+ * In browser: use proxy route /api/sse/{port}
+ * In CLI/server: use direct connection http://127.0.0.1:{port}/global/event
+ */
+function getSSEUrl(port: number): string {
+	if (isBrowser()) {
+		return `/api/sse/${port}`
+	}
+	return `http://127.0.0.1:${port}/global/event`
+}
+
+/**
+ * Get API base URL for a port
+ * In browser: use proxy route /api/opencode/{port}
+ * In CLI/server: use direct connection http://127.0.0.1:{port}
+ */
+function getApiBaseUrl(port: number): string {
+	if (isBrowser()) {
+		return `/api/opencode/${port}`
+	}
+	return `http://127.0.0.1:${port}`
+}
+
+/**
+ * Discover servers via browser proxy API
+ * Fetches /api/opencode-servers which returns discovered servers
+ */
+function discoverServersFromProxy(): Effect.Effect<DiscoveredServer[], Error> {
+	return Effect.tryPromise({
+		try: async () => {
+			const response = await fetch("/api/opencode-servers")
+			if (!response.ok) {
+				return []
+			}
+			const servers = (await response.json()) as Array<{
+				port: number
+				pid?: number
+				directory: string
+			}>
+			return servers.map((s) => ({
+				port: s.port,
+				pid: s.pid ?? 0,
+				directory: s.directory,
+			}))
+		},
+		catch: () => new Error("Failed to discover servers from proxy"),
+	}).pipe(Effect.catchAll(() => Effect.succeed([] as DiscoveredServer[])))
+}
+
+// ============================================================================
+// Discovery - lsof in CLI, proxy API in browser
+// ============================================================================
+
+/**
+ * Discover running OpenCode servers
  *
- * Scans for bun/opencode processes listening on TCP ports,
- * then verifies each is an OpenCode server via /project/current
+ * In browser: fetches /api/opencode-servers (Next.js proxy)
+ * In CLI/server: uses lsof to find bun/opencode processes
  */
 export function discoverServers(): Effect.Effect<DiscoveredServer[], Error> {
 	return Effect.gen(function* () {
-		// Check if we're in a browser (no lsof available)
-		if (typeof window !== "undefined") {
-			return []
+		// Browser: use proxy API for discovery
+		if (isBrowser()) {
+			return yield* discoverServersFromProxy()
 		}
 
 		// Dynamic import for Node.js child_process
@@ -182,10 +255,13 @@ function verifyServer(port: number, pid: number): Effect.Effect<DiscoveredServer
  *
  * Uses fetch with ReadableStream (works in Node.js and browsers)
  * Parses SSE format with eventsource-parser
+ *
+ * In browser: uses /api/sse/{port} proxy route
+ * In CLI/server: uses direct http://127.0.0.1:{port}/global/event
  */
 export function connectToSSE(port: number): Stream.Stream<SSEEvent, Error> {
 	return Stream.async<SSEEvent, Error>((emit) => {
-		const url = `http://127.0.0.1:${port}/global/event`
+		const url = getSSEUrl(port)
 		let controller: AbortController | null = new AbortController()
 		let parser: EventSourceParser | null = null
 
@@ -265,11 +341,11 @@ export function connectToSSE(port: number): Stream.Stream<SSEEvent, Error> {
 /**
  * WorldSSE manages server discovery and SSE connections
  *
- * Feeds events directly to a WorldStore instance.
+ * Feeds events directly to a Registry via atoms.
  * Self-contained - no dependencies on browser APIs or proxy routes.
  */
 export class WorldSSE {
-	private store: WorldStore
+	private registry: Registry.Registry
 	private config: Required<WorldSSEConfig>
 	private running = false
 	private discoveryFiber: Fiber.RuntimeFiber<void, Error> | null = null
@@ -277,8 +353,8 @@ export class WorldSSE {
 	private connectedPorts = new Set<number>()
 	private scope: Scope.CloseableScope | null = null // Scope for auto-cleanup
 
-	constructor(store: WorldStore, config: WorldSSEConfig = {}) {
-		this.store = store
+	constructor(registry: Registry.Registry, config: WorldSSEConfig = {}) {
+		this.registry = registry
 		this.config = {
 			serverUrl: config.serverUrl ?? "",
 			discoveryIntervalMs: config.discoveryIntervalMs ?? 5000,
@@ -295,7 +371,7 @@ export class WorldSSE {
 	start(): void {
 		if (this.running) return
 		this.running = true
-		this.store.setConnectionStatus("connecting")
+		this.registry.set(connectionStatusAtom, "connecting")
 
 		// Create scope for fiber lifecycle
 		Effect.runPromise(Scope.make()).then((scope) => {
@@ -342,7 +418,7 @@ export class WorldSSE {
 		this.connectionFibers.clear()
 		this.connectedPorts.clear()
 
-		this.store.setConnectionStatus("disconnected")
+		this.registry.set(connectionStatusAtom, "disconnected")
 	}
 
 	/**
@@ -362,6 +438,22 @@ export class WorldSSE {
 				Effect.catchAll(() => Effect.succeed([] as DiscoveredServer[])),
 			)
 
+			// Convert DiscoveredServer[] to Instance[] and feed to Registry
+			const instances = servers.map((server) => ({
+				port: server.port,
+				pid: server.pid,
+				directory: server.directory,
+				status: this.connectedPorts.has(server.port)
+					? ("connected" as const)
+					: ("connecting" as const),
+				baseUrl: isBrowser() ? `/api/opencode/${server.port}` : `http://127.0.0.1:${server.port}`,
+				lastSeen: Date.now(),
+			}))
+
+			// Feed instances to Registry - convert array to Map keyed by port
+			const instanceMap = new Map(instances.map((i) => [i.port, i]))
+			this.registry.set(instancesAtom, instanceMap)
+
 			// Connect to new servers
 			const activePorts = new Set(servers.map((s) => s.port))
 
@@ -380,9 +472,9 @@ export class WorldSSE {
 
 			// Update connection status
 			if (this.connectedPorts.size > 0) {
-				this.store.setConnectionStatus("connected")
+				this.registry.set(connectionStatusAtom, "connected")
 			} else if (servers.length === 0) {
-				this.store.setConnectionStatus("disconnected")
+				this.registry.set(connectionStatusAtom, "disconnected")
 			}
 		})
 
@@ -402,6 +494,9 @@ export class WorldSSE {
 		if (this.connectionFibers.has(port)) return
 
 		const connectionEffect = Effect.gen(this, function* () {
+			// Yield immediately to ensure async execution
+			yield* Effect.yieldNow()
+
 			let attempts = 0
 
 			while (this.running && attempts < this.config.maxReconnectAttempts) {
@@ -411,9 +506,15 @@ export class WorldSSE {
 					// Bootstrap: fetch initial data
 					yield* this.bootstrapFromServer(port)
 
+					// Mark as connected after successful bootstrap
+					// (Only for direct serverUrl connections - discovery loop handles multi-server status)
+					if (this.config.serverUrl && this.connectedPorts.size > 0) {
+						this.registry.set(connectionStatusAtom, "connected")
+					}
+
 					// Stream SSE events
 					yield* Stream.runForEach(connectToSSE(port), (event) =>
-						Effect.sync(() => this.handleEvent(event)),
+						Effect.sync(() => this.handleEvent(event, port)),
 					)
 
 					// Stream ended normally
@@ -454,13 +555,16 @@ export class WorldSSE {
 
 	/**
 	 * Bootstrap initial data from a server
+	 *
+	 * In browser: uses /api/opencode/{port} proxy route
+	 * In CLI/server: uses direct http://127.0.0.1:{port}
 	 */
 	private bootstrapFromServer(port: number): Effect.Effect<void, Error> {
 		return Effect.gen(this, function* () {
-			const baseUrl = `http://127.0.0.1:${port}`
+			const baseUrl = getApiBaseUrl(port)
 
-			// Fetch sessions and status in parallel
-			const [sessionsRes, statusRes] = yield* Effect.all([
+			// Fetch sessions, status, and project in parallel
+			const [sessionsRes, statusRes, projectRes] = yield* Effect.all([
 				Effect.tryPromise({
 					try: () => fetch(`${baseUrl}/session`).then((r) => r.json()),
 					catch: (e) => new Error(`Failed to fetch sessions: ${e}`),
@@ -469,28 +573,49 @@ export class WorldSSE {
 					try: () => fetch(`${baseUrl}/session/status`).then((r) => r.json()),
 					catch: (e) => new Error(`Failed to fetch status: ${e}`),
 				}),
+				Effect.tryPromise({
+					try: () => fetch(`${baseUrl}/project/current`).then((r) => r.json()),
+					catch: (e) => new Error(`Failed to fetch project: ${e}`),
+				}),
 			])
 
 			const sessions = (sessionsRes as Session[]) || []
 			const backendStatusMap = (statusRes as Record<string, BackendSessionStatus>) || {}
+			const project = projectRes as Project | null
 
 			// Normalize status
-			const statusMap: Record<string, SessionStatus> = {}
+			const statusMap = new Map<string, SessionStatus>()
 			for (const [sessionId, backendStatus] of Object.entries(backendStatusMap)) {
-				statusMap[sessionId] = normalizeBackendStatus(backendStatus)
+				statusMap.set(sessionId, normalizeBackendStatus(backendStatus))
 			}
 
-			// Update store
-			this.store.setSessions(sessions)
-			this.store.setStatus(statusMap)
-			this.store.setConnectionStatus("connected")
+			// Update Registry with sessions (convert array to Map keyed by id)
+			const sessionMap = new Map(sessions.map((s) => [s.id, s]))
+			this.registry.set(sessionsAtom, sessionMap)
+			this.registry.set(statusAtom, statusMap)
+			// Connection status is managed by startDiscoveryLoop() or when connectedPorts updates
+
+			// Update projects - merge with existing projects from other instances
+			if (project) {
+				const existingProjects = this.registry.get(projectsAtom)
+
+				// Check if project already exists (by worktree)
+				const updatedProjects = new Map(existingProjects)
+				updatedProjects.set(project.worktree, project)
+
+				this.registry.set(projectsAtom, updatedProjects)
+			}
 		})
 	}
 
 	/**
 	 * Handle incoming SSE event
+	 *
+	 * CRITICAL: Maps sessionID to Instance for routing.
+	 * When session events arrive, we extract the session directory and
+	 * map it to the Instance that sent the event (this connection's port).
 	 */
-	private handleEvent(event: SSEEvent): void {
+	private handleEvent(event: SSEEvent, sourcePort: number): void {
 		const { type, properties } = event
 
 		// Call the event callback for logging/debugging
@@ -506,7 +631,22 @@ export class WorldSSE {
 			case "session.updated": {
 				const session = properties as unknown as Session
 				if (session?.id) {
-					this.store.upsertSession(session)
+					// Upsert session in sessionsAtom (Map)
+					const sessions = this.registry.get(sessionsAtom)
+					const updated = new Map(sessions)
+					updated.set(session.id, session)
+					this.registry.set(sessionsAtom, updated)
+
+					// Map session to instance for routing
+					// Find instance by port from instancesAtom
+					const instances = this.registry.get(instancesAtom)
+					const instance = instances.get(sourcePort)
+					if (instance) {
+						const mapping = this.registry.get(sessionToInstancePortAtom)
+						const updatedMapping = new Map(mapping)
+						updatedMapping.set(session.id, instance.port)
+						this.registry.set(sessionToInstancePortAtom, updatedMapping)
+					}
 				}
 				break
 			}
@@ -515,7 +655,24 @@ export class WorldSSE {
 			case "message.updated": {
 				const message = properties as unknown as Message
 				if (message?.id) {
-					this.store.upsertMessage(message)
+					// Upsert message in messagesAtom (Map)
+					const messages = this.registry.get(messagesAtom)
+					const updated = new Map(messages)
+					updated.set(message.id, message)
+					this.registry.set(messagesAtom, updated)
+
+					// Map session to instance via messageID → sessionID lookup
+					const sessionId = message.sessionID
+					if (sessionId) {
+						const instances = this.registry.get(instancesAtom)
+						const instance = instances.get(sourcePort)
+						if (instance) {
+							const mapping = this.registry.get(sessionToInstancePortAtom)
+							const updatedMapping = new Map(mapping)
+							updatedMapping.set(sessionId, instance.port)
+							this.registry.set(sessionToInstancePortAtom, updatedMapping)
+						}
+					}
 				}
 				break
 			}
@@ -524,7 +681,27 @@ export class WorldSSE {
 			case "part.updated": {
 				const part = properties as unknown as Part
 				if (part?.id) {
-					this.store.upsertPart(part)
+					// Upsert part in partsAtom (Map)
+					const parts = this.registry.get(partsAtom)
+					const updated = new Map(parts)
+					updated.set(part.id, part)
+					this.registry.set(partsAtom, updated)
+
+					// Map session to instance via part → messageID → sessionID lookup
+					// Get message to find sessionID
+					const messages = this.registry.get(messagesAtom)
+					const message = messages.get(part.messageID)
+					const sessionId = message?.sessionID
+					if (sessionId) {
+						const instances = this.registry.get(instancesAtom)
+						const instance = instances.get(sourcePort)
+						if (instance) {
+							const mapping = this.registry.get(sessionToInstancePortAtom)
+							const updatedMapping = new Map(mapping)
+							updatedMapping.set(sessionId, instance.port)
+							this.registry.set(sessionToInstancePortAtom, updatedMapping)
+						}
+					}
 				}
 				break
 			}
@@ -535,7 +712,21 @@ export class WorldSSE {
 					status?: SessionStatus
 				}
 				if (sessionID && status) {
-					this.store.updateStatus(sessionID, status)
+					// Update status in statusAtom (Map)
+					const statuses = this.registry.get(statusAtom)
+					const updated = new Map(statuses)
+					updated.set(sessionID, status)
+					this.registry.set(statusAtom, updated)
+
+					// Map session to instance for status events too
+					const instances = this.registry.get(instancesAtom)
+					const instance = instances.get(sourcePort)
+					if (instance) {
+						const mapping = this.registry.get(sessionToInstancePortAtom)
+						const updatedMapping = new Map(mapping)
+						updatedMapping.set(sessionID, instance.port)
+						this.registry.set(sessionToInstancePortAtom, updatedMapping)
+					}
 				}
 				break
 			}
@@ -544,10 +735,10 @@ export class WorldSSE {
 }
 
 /**
- * Create a WorldSSE instance connected to a WorldStore
+ * Create a WorldSSE instance connected to a Registry
  */
-export function createWorldSSE(store: WorldStore, config?: WorldSSEConfig): WorldSSE {
-	return new WorldSSE(store, config)
+export function createWorldSSE(registry: Registry.Registry, config?: WorldSSEConfig): WorldSSE {
+	return new WorldSSE(registry, config)
 }
 
 // ============================================================================
@@ -588,7 +779,7 @@ export class SSEService extends Context.Tag("SSEService")<SSEService, SSEService
  * Pattern from cursor-store.ts: Layer.scoped wraps WorldSSE class,
  * providing Effect-native lifecycle management.
  *
- * @param store - WorldStore to feed events into
+ * @param registry - Registry to feed events into
  * @param config - SSE configuration
  *
  * @example
@@ -602,12 +793,12 @@ export class SSEService extends Context.Tag("SSEService")<SSEService, SSEService
  * })
  *
  * Effect.runPromise(
- *   program.pipe(Effect.provide(SSEServiceLive(store)))
+ *   program.pipe(Effect.provide(SSEServiceLive(registry)))
  * )
  * ```
  */
 export const SSEServiceLive = (
-	store: WorldStore,
+	registry: Registry.Registry,
 	config?: WorldSSEConfig,
 ): Layer.Layer<SSEService, never, never> =>
 	Layer.scoped(
@@ -615,7 +806,7 @@ export const SSEServiceLive = (
 		Effect.acquireRelease(
 			// Acquire: Create WorldSSE instance
 			Effect.sync(() => {
-				const sse = new WorldSSE(store, config)
+				const sse = new WorldSSE(registry, config)
 
 				return {
 					start: () => Effect.sync(() => sse.start()),

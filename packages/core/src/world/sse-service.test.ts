@@ -8,13 +8,13 @@
 import { describe, expect, it, beforeEach } from "vitest"
 import { Effect, Layer } from "effect"
 import { SSEService, SSEServiceLive } from "./sse.js"
-import { WorldStore } from "./atoms.js"
+import { Registry, connectionStatusAtom } from "./atoms.js"
 
 describe("SSEService - Effect.Service Pattern", () => {
-	let store: WorldStore
+	let registry: Registry.Registry
 
 	beforeEach(() => {
-		store = new WorldStore()
+		registry = Registry.make()
 	})
 
 	it("provides SSEService via Layer", async () => {
@@ -26,7 +26,7 @@ describe("SSEService - Effect.Service Pattern", () => {
 			expect(service.getConnectedPorts).toBeDefined()
 		})
 
-		await Effect.runPromise(program.pipe(Effect.provide(SSEServiceLive(store))))
+		await Effect.runPromise(program.pipe(Effect.provide(SSEServiceLive(registry))))
 	})
 
 	it("can start and stop SSE connections", async () => {
@@ -36,20 +36,22 @@ describe("SSEService - Effect.Service Pattern", () => {
 			// Start connections
 			yield* service.start()
 
-			// Verify store status changed
-			const stateAfterStart = store.getState()
-			expect(stateAfterStart.connectionStatus).toBe("connecting")
+			// Verify registry status changed
+			const statusAfterStart = registry.get(connectionStatusAtom)
+			expect(statusAfterStart).toBe("connecting")
 
 			// Stop connections
 			yield* service.stop()
 
 			// Verify cleanup
-			const stateAfterStop = store.getState()
-			expect(stateAfterStop.connectionStatus).toBe("disconnected")
+			const statusAfterStop = registry.get(connectionStatusAtom)
+			expect(statusAfterStop).toBe("disconnected")
 		})
 
 		await Effect.runPromise(
-			program.pipe(Effect.provide(SSEServiceLive(store, { serverUrl: "http://localhost:9999" }))),
+			program.pipe(
+				Effect.provide(SSEServiceLive(registry, { serverUrl: "http://localhost:9999" })),
+			),
 		)
 	})
 
@@ -59,19 +61,21 @@ describe("SSEService - Effect.Service Pattern", () => {
 			yield* service.start()
 
 			// Verify connecting
-			const state = store.getState()
-			expect(state.connectionStatus).toBe("connecting")
+			const status = registry.get(connectionStatusAtom)
+			expect(status).toBe("connecting")
 
 			// Scope will auto-cleanup when program exits
 		})
 
 		await Effect.runPromise(
-			program.pipe(Effect.provide(SSEServiceLive(store, { serverUrl: "http://localhost:9999" }))),
+			program.pipe(
+				Effect.provide(SSEServiceLive(registry, { serverUrl: "http://localhost:9999" })),
+			),
 		)
 
 		// After scope exit, service should be cleaned up
-		const finalState = store.getState()
-		expect(finalState.connectionStatus).toBe("disconnected")
+		const finalStatus = registry.get(connectionStatusAtom)
+		expect(finalStatus).toBe("disconnected")
 	})
 
 	it("getConnectedPorts returns Effect", async () => {
@@ -86,7 +90,9 @@ describe("SSEService - Effect.Service Pattern", () => {
 		})
 
 		await Effect.runPromise(
-			program.pipe(Effect.provide(SSEServiceLive(store, { serverUrl: "http://localhost:9999" }))),
+			program.pipe(
+				Effect.provide(SSEServiceLive(registry, { serverUrl: "http://localhost:9999" })),
+			),
 		)
 	})
 })

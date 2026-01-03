@@ -26,7 +26,7 @@ export { WorldStore, WorldStoreService, WorldStoreServiceLive } from "./atoms.js
 export type { WorldStoreServiceInterface } from "./atoms.js"
 
 // Enriched types
-export type { EnrichedMessage, EnrichedSession } from "./types.js"
+export type { Instance, EnrichedProject, EnrichedMessage, EnrichedSession } from "./types.js"
 
 // Cursor-based streaming types (Effect Schema)
 export { EventOffset, StreamCursor } from "./cursor.js"
@@ -72,3 +72,6 @@ export type { MetricSnapshot } from "./metrics-endpoint.js"
 // OpenTelemetry integration (Effect Layer)
 export { OTelService, OTelServiceLive, makeOTelServiceLive } from "./otel.js"
 export type { OTelConfig } from "./otel.js"
+
+// Routing utilities (pure functions for instance routing)
+export { getInstanceForSession, getInstanceForProject, getRouteUrl } from "./routing.js"

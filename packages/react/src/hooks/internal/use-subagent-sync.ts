@@ -117,8 +117,8 @@ export function useSubagentSync(options: UseSubagentSyncOptions): void {
 		}
 
 		// Handle message events
-		if (type === "message.created") {
-			const message = properties as Message
+		if (type === "message.updated") {
+			const message = (properties as { info: Message }).info
 
 			// Only process messages from registered subagents
 			subagents.getSessions(stateRef.current).then((sessions) => {
@@ -128,30 +128,16 @@ export function useSubagentSync(options: UseSubagentSyncOptions): void {
 
 				// Track message-to-session mapping
 				messageToSessionMap.current.set(message.id, message.sessionID)
-				void subagents.addMessage(stateRef.current!, message.sessionID, message)
+				void subagents.updateMessage(stateRef.current!, message.sessionID, message)
 
 				// Flush any pending parts for this message
 				flushPendingParts(message.id, message.sessionID)
 			})
-		} else if (type === "message.updated") {
-			const message = properties as Message
-
-			// Only process messages from registered subagents
-			subagents.getSessions(stateRef.current).then((sessions) => {
-				if (!sessions[message.sessionID]) {
-					return // Ignore unregistered sessions
-				}
-
-				// Update mapping if needed
-				messageToSessionMap.current.set(message.id, message.sessionID)
-				void subagents.updateMessage(stateRef.current!, message.sessionID, message)
-			})
 		}
-		// Handle part events (note: event types are "message.part.created", not "part.created")
-		else if (type === "message.part.created") {
-			handlePartEvent(properties as Part, false)
-		} else if (type === "message.part.updated") {
-			handlePartEvent(properties as Part, true)
+		// Handle part events
+		else if (type === "message.part.updated") {
+			const part = (properties as { part: Part; delta?: string }).part
+			handlePartEvent(part, true)
 		}
 	}, []) // Empty deps - uses refs for all values
 

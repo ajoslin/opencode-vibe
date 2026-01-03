@@ -360,6 +360,64 @@ OpenAPI Spec (openapi.json) → @hey-api/openapi-ts → Generated Types/Client
 
 **Source of truth:** `packages/sdk/openapi.json` (OpenAPI 3.1.1)
 
+### Data Flow Architecture
+
+**High-level:** Backend → SDK → Core → React/CLI
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  BACKEND (packages/opencode)                                │
+│  • Hono HTTP server                                         │
+│  • Filesystem state (~/.local/state/opencode/)              │
+│  • SSE event stream (/api/events)                           │
+│  • Instance metadata registry                               │
+└─────────────────────────────────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  SDK (packages/sdk)                                         │
+│  • OpenAPI-generated client                                 │
+│  • Type-safe API surface                                    │
+│  • Discovery service (filesystem scan)                      │
+└─────────────────────────────────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  CORE (packages/core)                                       │
+│  • World Stream (reactive state via effect-atom)            │
+│  • SSE connection management                                │
+│  • Computed APIs (pre-joined data)                          │
+│  • Promise-based external surface                           │
+└─────────────────────────────────────────────────────────────┘
+                          ▼
+        ┌─────────────────┴─────────────────┐
+        ▼                                   ▼
+┌──────────────────┐              ┌──────────────────┐
+│  REACT           │              │  CLI             │
+│  (packages/react)│              │  (apps/swarm-cli)│
+│  • Hooks         │              │  • Commands      │
+│  • UI binding    │              │  • TUI           │
+└──────────────────┘              └──────────────────┘
+```
+
+**Key Patterns:**
+
+1. **Discovery** - Filesystem-based server discovery via `~/.local/state/opencode/instances/`
+2. **World Stream** - Push-based reactive state (SSE → effect-atom → subscribers)
+3. **Smart Boundary** - Core owns computation, React/CLI bind UI
+4. **Single vs Multi** - Web app discovers multiple servers, CLI connects to one
+
+**Data Types:**
+
+- `InstanceMetadata` - Server discovery (directory, pid, port, startTime)
+- `WorldState` - Reactive snapshot (sessions, messages, parts)
+- `Session`, `Message`, `Part` - SDK types (never hand-roll)
+
+**Key Files:**
+- `packages/core/src/discovery/` - Server discovery
+- `packages/core/src/world/` - Reactive world stream
+- `packages/core/src/client/` - SDK client factory
+- `packages/react/src/hooks/` - React bindings
+- `apps/swarm-cli/src/world-state.ts` - CLI wrapper
+
 ---
 
 ## Known Gotchas

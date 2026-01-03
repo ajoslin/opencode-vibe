@@ -8,81 +8,40 @@
  */
 
 import { Atom } from "@effect-atom/atom"
-import type { Message, Part, Session } from "../types/domain.js"
-import type { SessionStatus } from "../types/events.js"
+import type { Part } from "../types/domain.js"
 import type { EnrichedMessage, EnrichedSession, WorldState } from "./types.js"
 import {
-	sessionsAtom as sessionsMapAtom,
-	messagesAtom as messagesMapAtom,
-	partsAtom as partsMapAtom,
-	statusAtom as statusMapAtom,
+	sessionsAtom,
+	messagesAtom,
+	partsAtom,
+	statusAtom,
 	connectionStatusAtom,
+	instancesAtom,
+	projectsAtom,
+	sessionToInstancePortAtom,
 } from "./atoms.js"
+import type { Instance } from "./types.js"
 
-/**
- * Array/Record-based derived atoms for enrichment logic
- *
- * These convert Map-based atoms from atoms.ts to arrays/records for simpler iteration.
- * The Map-based atoms in atoms.ts are canonical (single source of truth) and optimized for O(1) SSE updates.
- * These derived atoms provide array/record views for the enrichment layer.
- */
-
-/**
- * Sessions as array (derived from Map)
- */
-export const sessionsAtom = Atom.make((get) => Array.from(get(sessionsMapAtom).values()))
-
-/**
- * Messages as array (derived from Map, flattened from Map<sessionID, Message[]>)
- */
-export const messagesAtom = Atom.make((get) => {
-	const messagesMap = get(messagesMapAtom)
-	const allMessages: Message[] = []
-	for (const sessionMessages of messagesMap.values()) {
-		allMessages.push(...sessionMessages)
-	}
-	return allMessages
-})
-
-/**
- * Parts as array (derived from Map, flattened from Map<messageID, Part[]>)
- */
-export const partsAtom = Atom.make((get) => {
-	const partsMap = get(partsMapAtom)
-	const allParts: Part[] = []
-	for (const messageParts of partsMap.values()) {
-		allParts.push(...messageParts)
-	}
-	return allParts
-})
-
-/**
- * Status as record (derived from Map)
- */
-export const statusAtom = Atom.make((get) => {
-	const statusMap = get(statusMapAtom)
-	const record: Record<string, SessionStatus> = {}
-	for (const [sessionId, status] of statusMap.entries()) {
-		record[sessionId] = status
-	}
-	return record
-})
-
-// Re-export connectionStatusAtom directly (it's already a primitive atom)
-export { connectionStatusAtom }
+// Re-export base atoms for consumers that need them
+export { sessionsAtom, messagesAtom, partsAtom, statusAtom, connectionStatusAtom }
 
 /**
  * Derived world atom with enrichment logic
  *
  * Automatically recomputes when any base atom changes.
  * Implements the same enrichment logic as WorldStore.deriveWorldState.
+ *
+ * NOTE: atoms.ts now exports Map-based atoms. We convert to arrays here for iteration.
  */
 export const worldAtom = Atom.make((get) => {
-	const sessions = get(sessionsAtom)
-	const messages = get(messagesAtom)
-	const parts = get(partsAtom)
+	const sessions = Array.from(get(sessionsAtom).values())
+	const messages = Array.from(get(messagesAtom).values())
+	const parts = Array.from(get(partsAtom).values())
 	const status = get(statusAtom)
 	const connectionStatus = get(connectionStatusAtom)
+	const instances = Array.from(get(instancesAtom).values())
+	const projects = Array.from(get(projectsAtom).values())
+	const sessionToInstancePort = get(sessionToInstancePortAtom)
 
 	// Build message ID -> parts map
 	const partsByMessage = new Map<string, Part[]>()
@@ -111,7 +70,7 @@ export const worldAtom = Atom.make((get) => {
 	// Build enriched sessions
 	const enrichedSessions: EnrichedSession[] = sessions.map((session) => {
 		const sessionMessages = messagesBySession.get(session.id) ?? []
-		const sessionStatus = status[session.id] ?? "completed"
+		const sessionStatus = status.get(session.id) ?? "completed"
 		const isActive = sessionStatus === "running"
 
 		// Last activity is most recent message or session update
@@ -169,6 +128,58 @@ export const worldAtom = Atom.make((get) => {
 		streaming: enrichedSessions.filter((s) => s.messages.some((m) => m.isStreaming)).length,
 	}
 
+	// Build instance maps
+	const instanceByPort = new Map<number, Instance>()
+	for (const instance of instances) {
+		instanceByPort.set(instance.port, instance)
+	}
+
+	const instancesByDirectory = new Map<string, Instance[]>()
+	for (const instance of instances) {
+		const existing = instancesByDirectory.get(instance.directory) ?? []
+		existing.push(instance)
+		instancesByDirectory.set(instance.directory, existing)
+	}
+
+	const connectedInstanceCount = instances.filter((i) => i.status === "connected").length
+
+	// Build sessionToInstance map from sessionToInstancePort
+	const sessionToInstance = new Map<string, Instance>()
+	for (const [sessionId, port] of sessionToInstancePort.entries()) {
+		const instance = instanceByPort.get(port)
+		if (instance) {
+			sessionToInstance.set(sessionId, instance)
+		}
+	}
+
+	// Enrich projects with instances and sessions
+	const enrichedProjects = projects.map((project) => {
+		const projectInstances = instancesByDirectory.get(project.worktree) ?? []
+		const projectSessions = byDirectory.get(project.worktree) ?? []
+
+		const activeInstanceCount = projectInstances.filter((i) => i.status === "connected").length
+		const sessionCount = projectSessions.length
+		const projectActiveSessionCount = projectSessions.filter((s) => s.isActive).length
+
+		const lastActivityAt =
+			projectSessions.length > 0 ? Math.max(...projectSessions.map((s) => s.lastActivityAt)) : 0
+
+		return {
+			...project,
+			instances: projectInstances,
+			activeInstanceCount,
+			sessions: projectSessions,
+			sessionCount,
+			activeSessionCount: projectActiveSessionCount,
+			lastActivityAt,
+		}
+	})
+
+	const projectByDirectory = new Map<string, (typeof enrichedProjects)[0]>()
+	for (const project of enrichedProjects) {
+		projectByDirectory.set(project.worktree, project)
+	}
+
 	const worldState: WorldState = {
 		sessions: enrichedSessions,
 		activeSessionCount,
@@ -177,6 +188,13 @@ export const worldAtom = Atom.make((get) => {
 		lastUpdated: Date.now(),
 		byDirectory,
 		stats,
+		instances, // Already converted to array above
+		instanceByPort,
+		instancesByDirectory,
+		connectedInstanceCount,
+		projects: enrichedProjects,
+		projectByDirectory,
+		sessionToInstance,
 	}
 
 	return worldState

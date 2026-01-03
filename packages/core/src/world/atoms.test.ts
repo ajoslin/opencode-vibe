@@ -5,6 +5,8 @@
 import { describe, expect, it } from "vitest"
 import type { Message, Part, Session } from "../types/domain.js"
 import type { SessionStatus } from "../types/events.js"
+import type { Project } from "../types/sdk.js"
+import type { Instance } from "./types.js"
 import { WorldStore } from "./atoms.js"
 
 describe("WorldStore", () => {
@@ -16,6 +18,685 @@ describe("WorldStore", () => {
 		expect(state.activeSessionCount).toBe(0)
 		expect(state.activeSession).toBeNull()
 		expect(state.connectionStatus).toBe("disconnected")
+	})
+
+	/**
+	 * Instance/Project management tests - TDD for new methods and derivation
+	 */
+	describe("setInstances", () => {
+		it("updates instances and notifies subscribers", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instances: Instance[] = [
+				{
+					port: 3000,
+					pid: 1234,
+					directory: "/test/project",
+					status: "connected",
+					baseUrl: "http://localhost:3000",
+					lastSeen: now,
+				},
+			]
+
+			let notifyCount = 0
+			store.subscribe(() => {
+				notifyCount++
+			})
+
+			// subscribe() fires immediately
+			expect(notifyCount).toBe(1)
+
+			store.setInstances(instances)
+
+			// Should notify once
+			expect(notifyCount).toBe(2)
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(1)
+			expect(state.instances[0].port).toBe(3000)
+		})
+	})
+
+	describe("setProjects", () => {
+		it("updates projects and notifies subscribers", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const projects: Project[] = [
+				{
+					id: "proj-1",
+					worktree: "/test/project",
+					time: { created: now },
+				},
+			]
+
+			let notifyCount = 0
+			store.subscribe(() => {
+				notifyCount++
+			})
+
+			// subscribe() fires immediately
+			expect(notifyCount).toBe(1)
+
+			store.setProjects(projects)
+
+			// Should notify once
+			expect(notifyCount).toBe(2)
+
+			const state = store.getState()
+			expect(state.projects).toHaveLength(1)
+			expect(state.projects[0].id).toBe("proj-1")
+		})
+	})
+
+	describe("setSessionToInstance", () => {
+		it("maps session to instance and notifies subscribers", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instance: Instance = {
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			}
+
+			// Must add instance first for derivation to find it
+			store.setInstances([instance])
+
+			let notifyCount = 0
+			store.subscribe(() => {
+				notifyCount++
+			})
+
+			// subscribe() fires immediately
+			expect(notifyCount).toBe(1)
+
+			store.setSessionToInstance("ses-1", instance)
+
+			// Should notify once
+			expect(notifyCount).toBe(2)
+
+			const state = store.getState()
+			expect(state.sessionToInstance.get("ses-1")).toEqual(instance)
+		})
+	})
+
+	describe("upsertInstance", () => {
+		it("inserts new instance into empty store using binary search by port", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instance: Instance = {
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			}
+
+			store.upsertInstance(instance)
+			const state = store.getState()
+
+			expect(state.instances).toHaveLength(1)
+			expect(state.instances[0].port).toBe(3000)
+		})
+
+		it("updates existing instance by port", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instance1: Instance = {
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connecting",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			}
+
+			const instance2: Instance = {
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now + 1000,
+			}
+
+			store.upsertInstance(instance1)
+			store.upsertInstance(instance2)
+			const state = store.getState()
+
+			expect(state.instances).toHaveLength(1)
+			expect(state.instances[0].status).toBe("connected")
+			expect(state.instances[0].lastSeen).toBe(now + 1000)
+		})
+
+		it("maintains sorted order by port for binary search", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instances = [
+				{
+					port: 3002,
+					pid: 3,
+					directory: "/test3",
+					status: "connected" as const,
+					baseUrl: "http://localhost:3002",
+					lastSeen: now,
+				},
+				{
+					port: 3000,
+					pid: 1,
+					directory: "/test1",
+					status: "connected" as const,
+					baseUrl: "http://localhost:3000",
+					lastSeen: now,
+				},
+				{
+					port: 3001,
+					pid: 2,
+					directory: "/test2",
+					status: "connected" as const,
+					baseUrl: "http://localhost:3001",
+					lastSeen: now,
+				},
+			]
+
+			for (const instance of instances) {
+				store.upsertInstance(instance)
+			}
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(3)
+
+			// Internal array should be sorted by port (verify through consistent state)
+			expect(state.instanceByPort.get(3000)?.pid).toBe(1)
+			expect(state.instanceByPort.get(3001)?.pid).toBe(2)
+			expect(state.instanceByPort.get(3002)?.pid).toBe(3)
+		})
+
+		it("uses binary search for O(log n) updates with 100 instances", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			// Insert 100 instances
+			for (let i = 0; i < 100; i++) {
+				store.upsertInstance({
+					port: 3000 + i,
+					pid: i,
+					directory: `/test${i}`,
+					status: "connected",
+					baseUrl: `http://localhost:${3000 + i}`,
+					lastSeen: now,
+				})
+			}
+
+			// Update one in the middle - should use binary search
+			store.upsertInstance({
+				port: 3050,
+				pid: 50,
+				directory: "/test50-updated",
+				status: "connected",
+				baseUrl: "http://localhost:3050",
+				lastSeen: now + 1000,
+			})
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(100)
+			const updated = state.instanceByPort.get(3050)
+			expect(updated?.directory).toBe("/test50-updated")
+		})
+	})
+
+	describe("updateInstanceStatus", () => {
+		it("updates status of instance by port", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			store.upsertInstance({
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connecting",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			})
+
+			store.updateInstanceStatus(3000, "connected")
+
+			const state = store.getState()
+			expect(state.instanceByPort.get(3000)?.status).toBe("connected")
+		})
+
+		it("does nothing if instance not found", () => {
+			const store = new WorldStore()
+
+			store.updateInstanceStatus(9999, "connected")
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(0)
+		})
+	})
+
+	describe("removeInstance", () => {
+		it("removes instance by port", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			store.upsertInstance({
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			})
+
+			let notifyCount = 0
+			store.subscribe(() => {
+				notifyCount++
+			})
+
+			// subscribe() fires immediately
+			expect(notifyCount).toBe(1)
+
+			store.removeInstance(3000)
+
+			// Should notify once
+			expect(notifyCount).toBe(2)
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(0)
+			expect(state.instanceByPort.get(3000)).toBeUndefined()
+		})
+
+		it("does nothing if instance not found", () => {
+			const store = new WorldStore()
+
+			store.removeInstance(9999)
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(0)
+		})
+
+		it("maintains sorted order after removal", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			for (let i = 0; i < 5; i++) {
+				store.upsertInstance({
+					port: 3000 + i,
+					pid: i,
+					directory: `/test${i}`,
+					status: "connected",
+					baseUrl: `http://localhost:${3000 + i}`,
+					lastSeen: now,
+				})
+			}
+
+			// Remove middle instance
+			store.removeInstance(3002)
+
+			const state = store.getState()
+			expect(state.instances).toHaveLength(4)
+			expect(state.instanceByPort.get(3002)).toBeUndefined()
+
+			// Remaining instances should still be accessible
+			expect(state.instanceByPort.get(3000)?.pid).toBe(0)
+			expect(state.instanceByPort.get(3001)?.pid).toBe(1)
+			expect(state.instanceByPort.get(3003)?.pid).toBe(3)
+			expect(state.instanceByPort.get(3004)?.pid).toBe(4)
+		})
+	})
+
+	describe("deriveWorldState - Instance/Project enrichment", () => {
+		it("computes instanceByPort map", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instances: Instance[] = [
+				{
+					port: 3000,
+					pid: 1234,
+					directory: "/test/project1",
+					status: "connected",
+					baseUrl: "http://localhost:3000",
+					lastSeen: now,
+				},
+				{
+					port: 3001,
+					pid: 5678,
+					directory: "/test/project2",
+					status: "connected",
+					baseUrl: "http://localhost:3001",
+					lastSeen: now,
+				},
+			]
+
+			store.setInstances(instances)
+			const state = store.getState()
+
+			expect(state.instanceByPort.size).toBe(2)
+			expect(state.instanceByPort.get(3000)?.pid).toBe(1234)
+			expect(state.instanceByPort.get(3001)?.pid).toBe(5678)
+		})
+
+		it("computes instancesByDirectory map with multiple instances per directory", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instances: Instance[] = [
+				{
+					port: 3000,
+					pid: 1234,
+					directory: "/test/project",
+					status: "connected",
+					baseUrl: "http://localhost:3000",
+					lastSeen: now,
+				},
+				{
+					port: 3001,
+					pid: 5678,
+					directory: "/test/project",
+					status: "connected",
+					baseUrl: "http://localhost:3001",
+					lastSeen: now + 1000,
+				},
+			]
+
+			store.setInstances(instances)
+			const state = store.getState()
+
+			expect(state.instancesByDirectory.size).toBe(1)
+			const projectInstances = state.instancesByDirectory.get("/test/project")
+			expect(projectInstances).toHaveLength(2)
+			expect(projectInstances?.[0].port).toBe(3000)
+			expect(projectInstances?.[1].port).toBe(3001)
+		})
+
+		it("computes connectedInstanceCount", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instances: Instance[] = [
+				{
+					port: 3000,
+					pid: 1,
+					directory: "/test1",
+					status: "connected",
+					baseUrl: "http://localhost:3000",
+					lastSeen: now,
+				},
+				{
+					port: 3001,
+					pid: 2,
+					directory: "/test2",
+					status: "connecting",
+					baseUrl: "http://localhost:3001",
+					lastSeen: now,
+				},
+				{
+					port: 3002,
+					pid: 3,
+					directory: "/test3",
+					status: "connected",
+					baseUrl: "http://localhost:3002",
+					lastSeen: now,
+				},
+				{
+					port: 3003,
+					pid: 4,
+					directory: "/test4",
+					status: "disconnected",
+					baseUrl: "http://localhost:3003",
+					lastSeen: now,
+				},
+			]
+
+			store.setInstances(instances)
+			const state = store.getState()
+
+			expect(state.connectedInstanceCount).toBe(2)
+		})
+
+		it("enriches projects with instances and sessions", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instances: Instance[] = [
+				{
+					port: 3000,
+					pid: 1234,
+					directory: "/test/project",
+					status: "connected",
+					baseUrl: "http://localhost:3000",
+					lastSeen: now,
+				},
+			]
+
+			const projects: Project[] = [
+				{
+					id: "proj-1",
+					worktree: "/test/project",
+					time: { created: now },
+				},
+			]
+
+			const sessions: Session[] = [
+				{
+					id: "ses-1",
+					title: "Test Session",
+					directory: "/test/project",
+					time: { created: now, updated: now },
+				},
+			]
+
+			store.setInstances(instances)
+			store.setProjects(projects)
+			store.setSessions(sessions)
+			store.setSessionToInstance("ses-1", instances[0])
+
+			const state = store.getState()
+
+			expect(state.projects).toHaveLength(1)
+			const enrichedProject = state.projects[0]
+			expect(enrichedProject.id).toBe("proj-1")
+			expect(enrichedProject.instances).toHaveLength(1)
+			expect(enrichedProject.instances[0].port).toBe(3000)
+			expect(enrichedProject.activeInstanceCount).toBe(1)
+			expect(enrichedProject.sessions).toHaveLength(1)
+			expect(enrichedProject.sessionCount).toBe(1)
+			expect(enrichedProject.activeSessionCount).toBe(0)
+		})
+
+		it("computes projectByDirectory map", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const projects: Project[] = [
+				{
+					id: "proj-1",
+					worktree: "/test/project1",
+					time: { created: now },
+				},
+				{
+					id: "proj-2",
+					worktree: "/test/project2",
+					time: { created: now },
+				},
+			]
+
+			store.setProjects(projects)
+			const state = store.getState()
+
+			expect(state.projectByDirectory.size).toBe(2)
+			expect(state.projectByDirectory.get("/test/project1")?.id).toBe("proj-1")
+			expect(state.projectByDirectory.get("/test/project2")?.id).toBe("proj-2")
+		})
+
+		it("computes sessionToInstance map from internal mapping", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instance: Instance = {
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			}
+
+			// Must add instance first for derivation to find it
+			store.setInstances([instance])
+
+			store.setSessionToInstance("ses-1", instance)
+			store.setSessionToInstance("ses-2", instance)
+
+			const state = store.getState()
+
+			expect(state.sessionToInstance.size).toBe(2)
+			expect(state.sessionToInstance.get("ses-1")?.port).toBe(3000)
+			expect(state.sessionToInstance.get("ses-2")?.port).toBe(3000)
+		})
+
+		it("enriches projects with active session count based on status", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const projects: Project[] = [
+				{
+					id: "proj-1",
+					worktree: "/test/project",
+					time: { created: now },
+				},
+			]
+
+			const sessions: Session[] = [
+				{
+					id: "ses-1",
+					title: "Active Session",
+					directory: "/test/project",
+					time: { created: now, updated: now },
+				},
+				{
+					id: "ses-2",
+					title: "Completed Session",
+					directory: "/test/project",
+					time: { created: now, updated: now },
+				},
+			]
+
+			const status: Record<string, SessionStatus> = {
+				"ses-1": "running",
+				"ses-2": "completed",
+			}
+
+			store.setProjects(projects)
+			store.setSessions(sessions)
+			store.setStatus(status)
+
+			const state = store.getState()
+
+			const enrichedProject = state.projects[0]
+			expect(enrichedProject.activeSessionCount).toBe(1)
+		})
+
+		it("computes project lastActivityAt from most recent session", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const projects: Project[] = [
+				{
+					id: "proj-1",
+					worktree: "/test/project",
+					time: { created: now },
+				},
+			]
+
+			const sessions: Session[] = [
+				{
+					id: "ses-1",
+					title: "Old Session",
+					directory: "/test/project",
+					time: { created: now - 10000, updated: now - 10000 },
+				},
+				{
+					id: "ses-2",
+					title: "Recent Session",
+					directory: "/test/project",
+					time: { created: now, updated: now },
+				},
+			]
+
+			store.setProjects(projects)
+			store.setSessions(sessions)
+
+			const state = store.getState()
+
+			const enrichedProject = state.projects[0]
+			expect(enrichedProject.lastActivityAt).toBe(now)
+		})
+	})
+
+	describe("Integration - Instance/Session routing", () => {
+		it("maintains sessionToInstance mapping for routing live interactions", () => {
+			const store = new WorldStore()
+			const now = Date.now()
+
+			const instance1: Instance = {
+				port: 3000,
+				pid: 1234,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3000",
+				lastSeen: now,
+			}
+
+			const instance2: Instance = {
+				port: 3001,
+				pid: 5678,
+				directory: "/test/project",
+				status: "connected",
+				baseUrl: "http://localhost:3001",
+				lastSeen: now,
+			}
+
+			const sessions: Session[] = [
+				{
+					id: "ses-1",
+					title: "Session on Instance 1",
+					directory: "/test/project",
+					time: { created: now, updated: now },
+				},
+				{
+					id: "ses-2",
+					title: "Session on Instance 2",
+					directory: "/test/project",
+					time: { created: now, updated: now },
+				},
+			]
+
+			store.setInstances([instance1, instance2])
+			store.setSessions(sessions)
+			store.setSessionToInstance("ses-1", instance1)
+			store.setSessionToInstance("ses-2", instance2)
+
+			const state = store.getState()
+
+			// Verify routing map
+			expect(state.sessionToInstance.get("ses-1")?.port).toBe(3000)
+			expect(state.sessionToInstance.get("ses-2")?.port).toBe(3001)
+
+			// Verify both sessions in same project (directory)
+			expect(state.byDirectory.get("/test/project")).toHaveLength(2)
+		})
 	})
 
 	it("updates sessions and derives world state", () => {
@@ -802,10 +1483,7 @@ describe("effect-atom atoms", () => {
 				time: { created: now, updated: now },
 			}
 
-			const newMap = new Map<string, Session>()
-			newMap.set(session.id, session)
-
-			registry.set(sessionsAtom, newMap)
+			registry.set(sessionsAtom, new Map([["ses-1", session]]))
 			const result = registry.get(sessionsAtom)
 
 			expect(result.size).toBe(1)
@@ -824,7 +1502,7 @@ describe("effect-atom atoms", () => {
 			expect(messages.size).toBe(0)
 		})
 
-		it("can be written via Registry with messages keyed by sessionId", async () => {
+		it("can be written via Registry", async () => {
 			const { messagesAtom, Registry } = await import("./atoms.js")
 			const registry = Registry.make()
 			const now = Date.now()
@@ -836,15 +1514,11 @@ describe("effect-atom atoms", () => {
 				time: { created: now },
 			}
 
-			const newMap = new Map<string, Message[]>()
-			newMap.set("ses-1", [message])
-
-			registry.set(messagesAtom, newMap)
+			registry.set(messagesAtom, new Map([["msg-1", message]]))
 			const result = registry.get(messagesAtom)
 
 			expect(result.size).toBe(1)
-			expect(result.get("ses-1")).toHaveLength(1)
-			expect(result.get("ses-1")?.[0]).toEqual(message)
+			expect(result.get("msg-1")).toEqual(message)
 		})
 	})
 
@@ -859,7 +1533,7 @@ describe("effect-atom atoms", () => {
 			expect(parts.size).toBe(0)
 		})
 
-		it("can be written via Registry with parts keyed by messageId", async () => {
+		it("can be written via Registry", async () => {
 			const { partsAtom, Registry } = await import("./atoms.js")
 			const registry = Registry.make()
 
@@ -870,15 +1544,11 @@ describe("effect-atom atoms", () => {
 				content: "Hello",
 			}
 
-			const newMap = new Map<string, Part[]>()
-			newMap.set("msg-1", [part])
-
-			registry.set(partsAtom, newMap)
+			registry.set(partsAtom, new Map([["part-1", part]]))
 			const result = registry.get(partsAtom)
 
 			expect(result.size).toBe(1)
-			expect(result.get("msg-1")).toHaveLength(1)
-			expect(result.get("msg-1")?.[0]).toEqual(part)
+			expect(result.get("part-1")).toEqual(part)
 		})
 	})
 
@@ -893,15 +1563,16 @@ describe("effect-atom atoms", () => {
 			expect(status.size).toBe(0)
 		})
 
-		it("can be written via Registry with status keyed by sessionId", async () => {
+		it("can be written via Registry", async () => {
 			const { statusAtom, Registry } = await import("./atoms.js")
 			const registry = Registry.make()
 
-			const newMap = new Map<string, SessionStatus>()
-			newMap.set("ses-1", "running")
-			newMap.set("ses-2", "completed")
+			const newStatus = new Map<string, SessionStatus>([
+				["ses-1", "running"],
+				["ses-2", "completed"],
+			])
 
-			registry.set(statusAtom, newMap)
+			registry.set(statusAtom, newStatus)
 			const result = registry.get(statusAtom)
 
 			expect(result.size).toBe(2)
@@ -978,21 +1649,28 @@ describe("effect-atom atoms", () => {
 			expect(registry.get(sessionCountAtom)).toBe(0)
 
 			// Add sessions
-			const sessions = new Map<string, Session>()
-			sessions.set("ses-1", {
-				id: "ses-1",
-				title: "Test 1",
-				directory: "/test",
-				time: { created: now, updated: now },
-			})
-			sessions.set("ses-2", {
-				id: "ses-2",
-				title: "Test 2",
-				directory: "/test",
-				time: { created: now, updated: now },
-			})
+			const sessionsMap = new Map<string, Session>([
+				[
+					"ses-1",
+					{
+						id: "ses-1",
+						title: "Test 1",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+				],
+				[
+					"ses-2",
+					{
+						id: "ses-2",
+						title: "Test 2",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+				],
+			])
 
-			registry.set(sessionsAtom, sessions)
+			registry.set(sessionsAtom, sessionsMap)
 
 			// Derived atom should auto-update
 			expect(registry.get(sessionCountAtom)).toBe(2)
@@ -1014,21 +1692,25 @@ describe("effect-atom atoms", () => {
 			})
 
 			// Make a change
-			const sessions = new Map<string, Session>()
-			sessions.set("ses-1", {
-				id: "ses-1",
-				title: "Test",
-				directory: "/test",
-				time: { created: now, updated: now },
-			})
+			const sessionsMap = new Map<string, Session>([
+				[
+					"ses-1",
+					{
+						id: "ses-1",
+						title: "Test",
+						directory: "/test",
+						time: { created: now, updated: now },
+					},
+				],
+			])
 
-			registry.set(sessionsAtom, sessions)
+			registry.set(sessionsAtom, sessionsMap)
 
 			// Should have notified
 			expect(notifyCount).toBe(1)
 			expect(lastValue).not.toBeNull()
 			expect(lastValue!.size).toBe(1)
-			expect(lastValue!.get("ses-1")?.title).toBe("Test")
+			expect(lastValue!.get("ses-1")!.title).toBe("Test")
 		})
 	})
 })
