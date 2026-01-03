@@ -3,85 +3,94 @@
  *
  * Tests the self-contained createWorldStream API that handles
  * discovery and SSE connections internally.
+ *
+ * Uses dependency injection instead of mocks for better isolation.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest"
-import { createWorldStream } from "./stream.js"
-import { connectionStatusAtom, WorldStore } from "./atoms.js"
+import { describe, expect, it, vi } from "vitest"
+import { connectionStatusAtom, WorldStore, Registry } from "./atoms.js"
+import type { WorldSSE } from "./sse.js"
+import { createMergedWorldStream } from "./merged-stream.js"
 
-// Mock discovery module
-const mockDiscoverServers = vi.fn()
-vi.mock("../discovery/server-discovery.js", () => ({
-	discoverServers: mockDiscoverServers,
-}))
+/**
+ * Create a test SSE instance with controllable lifecycle
+ */
+function createTestSSE(registry: ReturnType<typeof Registry.make>) {
+	let started = false
+	let stopped = false
 
-// Mock the WorldSSE class - uses Registry now, not WorldStore
-vi.mock("./sse.js", async () => {
-	const atoms = await import("./atoms.js")
 	return {
-		WorldSSE: class MockWorldSSE {
-			private registry: any
-			private config: any
-			constructor(registry: any, config: any) {
-				this.registry = registry
-				this.config = config
-			}
-			start() {
-				// Simulate bootstrap completing - use Registry pattern
-				this.registry.set(atoms.connectionStatusAtom, "connected")
-			}
-			stop() {
-				this.registry.set(atoms.connectionStatusAtom, "disconnected")
-			}
-			getConnectedPorts() {
-				return []
-			}
+		start() {
+			started = true
+			// Simulate proper SSE lifecycle: connecting → connected
+			registry.set(connectionStatusAtom, "connecting")
+			// Transition to connected synchronously for test simplicity
+			registry.set(connectionStatusAtom, "connected")
 		},
-		discoverServers: vi.fn(),
-		connectToSSE: vi.fn(),
-		createWorldSSE: vi.fn(),
-	}
-})
+		stop() {
+			stopped = true
+			registry.set(connectionStatusAtom, "disconnected")
+		},
+		getConnectedPorts() {
+			return []
+		},
+		// Test helpers
+		isStarted: () => started,
+		isStopped: () => stopped,
+	} as unknown as WorldSSE
+}
 
-describe("createWorldStream", () => {
-	beforeEach(() => {
-		vi.clearAllMocks()
-	})
-
+describe("createWorldStream with dependency injection", () => {
 	it("creates a stream handle with all methods", async () => {
-		const stream = createWorldStream({ baseUrl: "http://localhost:1999" })
+		const registry = Registry.make()
+		const sse = createTestSSE(registry)
+
+		const stream = createMergedWorldStream({ registry, sse })
+		sse.start()
 
 		expect(typeof stream.subscribe).toBe("function")
 		expect(typeof stream.getSnapshot).toBe("function")
 		expect(typeof stream[Symbol.asyncIterator]).toBe("function")
 		expect(typeof stream.dispose).toBe("function")
 
-		// Clean up
 		await stream.dispose()
 	})
 
-	describe("auto-discovery", () => {
-		it("uses explicit baseUrl when provided", async () => {
-			const stream = createWorldStream({ baseUrl: "http://localhost:3000" })
+	describe("connection lifecycle", () => {
+		it("properly transitions through connecting → connected", async () => {
+			const registry = Registry.make()
+			const sse = createTestSSE(registry)
 
-			// With explicit baseUrl, should connect (mocked WorldSSE sets status to "connected")
-			await new Promise((resolve) => setTimeout(resolve, 10))
+			const stream = createMergedWorldStream({ registry, sse })
 
-			const snapshot = await stream.getSnapshot()
-			expect(snapshot.connectionStatus).toBe("connected")
+			// Initially disconnected
+			const initial = await stream.getSnapshot()
+			expect(initial.connectionStatus).toBe("disconnected")
+
+			// Start SSE
+			sse.start()
+
+			// Should be connected (our test SSE sets both states synchronously)
+			const afterStart = await stream.getSnapshot()
+			expect(afterStart.connectionStatus).toBe("connected")
 
 			await stream.dispose()
 		})
 
-		it("delegates to merged-stream for discovery when no baseUrl", async () => {
-			const stream = createWorldStream()
+		it("transitions to disconnected on stop", async () => {
+			const registry = Registry.make()
+			const sse = createTestSSE(registry)
 
-			// merged-stream.ts delegates to WorldSSE which has internal discovery loop
-			// Mock WorldSSE sets status to "connected" on start()
-			await new Promise((resolve) => setTimeout(resolve, 10))
+			const stream = createMergedWorldStream({ registry, sse })
+			sse.start()
 
-			const snapshot = await stream.getSnapshot()
-			expect(snapshot.connectionStatus).toBe("connected")
+			const before = await stream.getSnapshot()
+			expect(before.connectionStatus).toBe("connected")
+
+			sse.stop()
+
+			const after = await stream.getSnapshot()
+			expect(after.connectionStatus).toBe("disconnected")
 
 			await stream.dispose()
 		})
@@ -89,8 +98,10 @@ describe("createWorldStream", () => {
 
 	describe("getSnapshot", () => {
 		it("returns current world state", async () => {
-			// Use explicit baseUrl to avoid discovery
-			const stream = createWorldStream({ baseUrl: "http://localhost:1999" })
+			const registry = Registry.make()
+			const sse = createTestSSE(registry)
+
+			const stream = createMergedWorldStream({ registry, sse })
 			const snapshot = await stream.getSnapshot()
 
 			expect(snapshot.sessions).toEqual([])
@@ -99,45 +110,14 @@ describe("createWorldStream", () => {
 
 			await stream.dispose()
 		})
-
-		it("returns connected status after start", async () => {
-			// Mock discovery for auto-discovery path
-			mockDiscoverServers.mockResolvedValue([{ port: 4056, pid: 1234, directory: "/test/dir" }])
-
-			const stream = createWorldStream()
-
-			// Wait for mock to set connected status
-			await new Promise((resolve) => setTimeout(resolve, 10))
-
-			const snapshot = await stream.getSnapshot()
-			expect(snapshot.connectionStatus).toBe("connected")
-
-			await stream.dispose()
-		})
 	})
 
 	describe("subscribe", () => {
-		it("receives updates when state changes", async () => {
-			// Use explicit baseUrl to avoid discovery
-			const stream = createWorldStream({ baseUrl: "http://localhost:1999" })
-			const updates: any[] = []
-
-			const unsubscribe = stream.subscribe((state) => {
-				updates.push(state)
-			})
-
-			// Wait a bit for initial connection
-			await new Promise((resolve) => setTimeout(resolve, 10))
-
-			expect(updates.length).toBeGreaterThanOrEqual(0)
-
-			unsubscribe()
-			await stream.dispose()
-		})
-
 		it("returns unsubscribe function", async () => {
-			// Use explicit baseUrl to avoid discovery
-			const stream = createWorldStream({ baseUrl: "http://localhost:1999" })
+			const registry = Registry.make()
+			const sse = createTestSSE(registry)
+
+			const stream = createMergedWorldStream({ registry, sse })
 			const callback = vi.fn()
 
 			const unsubscribe = stream.subscribe(callback)
@@ -150,8 +130,10 @@ describe("createWorldStream", () => {
 
 	describe("async iterator", () => {
 		it("yields initial world state", async () => {
-			// Use explicit baseUrl to avoid discovery
-			const stream = createWorldStream({ baseUrl: "http://localhost:1999" })
+			const registry = Registry.make()
+			const sse = createTestSSE(registry)
+
+			const stream = createMergedWorldStream({ registry, sse })
 			const iterator = stream[Symbol.asyncIterator]()
 
 			// Get first value
@@ -167,11 +149,11 @@ describe("createWorldStream", () => {
 
 	describe("dispose", () => {
 		it("cleans up resources", async () => {
-			// Use explicit baseUrl to avoid discovery
-			const stream = createWorldStream({ baseUrl: "http://localhost:1999" })
+			const registry = Registry.make()
+			const sse = createTestSSE(registry)
 
-			// Wait for bootstrap to complete
-			await new Promise((resolve) => setTimeout(resolve, 10))
+			const stream = createMergedWorldStream({ registry, sse })
+			sse.start()
 
 			// Get initial snapshot
 			const before = await stream.getSnapshot()

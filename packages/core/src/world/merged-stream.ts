@@ -41,6 +41,17 @@ export interface MergedStreamConfig extends WorldStreamConfig {
 	 * Each source is checked for availability before inclusion
 	 */
 	sources?: EventSource[]
+	/**
+	 * Optional WorldSSE instance for dependency injection (testing)
+	 * If not provided, creates a new WorldSSE instance
+	 */
+	sse?: WorldSSE
+	/**
+	 * Optional Registry for dependency injection (testing)
+	 * If not provided, creates a new Registry
+	 * Note: If both sse and registry are provided, sse should already be using this registry
+	 */
+	registry?: ReturnType<typeof Registry.make>
 }
 
 /**
@@ -178,19 +189,31 @@ export interface MergedStreamHandle extends WorldStreamHandle {
  * ```
  */
 export function createMergedWorldStream(config: MergedStreamConfig = {}): MergedStreamHandle {
-	const { baseUrl, autoReconnect = true, onEvent, sources = [] } = config
-
-	const registry = Registry.make()
-
-	// Create WorldSSE instance
-	// If baseUrl provided, connect to that specific server
-	// Otherwise, let WorldSSE use its built-in discovery loop to find and connect to ALL servers
-	const sse = new WorldSSE(registry, {
-		serverUrl: baseUrl, // undefined = use discovery loop for all servers
-		autoReconnect,
+	const {
+		baseUrl,
+		autoReconnect = true,
 		onEvent,
-	})
-	sse.start()
+		sources = [],
+		sse: injectedSSE,
+		registry: injectedRegistry,
+	} = config
+
+	// Use injected registry (for testing) or create a new one
+	const registry = injectedRegistry || Registry.make()
+
+	// Use injected SSE instance (for testing) or create a new one
+	const sse =
+		injectedSSE ||
+		new WorldSSE(registry, {
+			serverUrl: baseUrl, // undefined = use discovery loop for all servers
+			autoReconnect,
+			onEvent,
+		})
+
+	// Only start if we created it (injected SSE is controlled by test)
+	if (!injectedSSE) {
+		sse.start()
+	}
 
 	/**
 	 * Create merged event stream from all available sources
