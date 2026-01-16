@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
 
 /**
  * API Proxy for OpenCode servers
@@ -31,6 +31,8 @@ import { NextRequest, NextResponse } from "next/server"
  * // Returns response to browser (same-origin)
  */
 
+import { createAuthorizationHeader, getManualServerByProxyPort } from "@/lib/manual-server-registry"
+
 type RouteContext = {
 	params: Promise<{
 		port: string
@@ -38,10 +40,6 @@ type RouteContext = {
 	}>
 }
 
-/**
- * Reserved segments that should not be treated as port numbers
- * These have their own static route handlers (e.g., /api/opencode/servers/route.ts)
- */
 const RESERVED_SEGMENTS = new Set(["servers"])
 
 /**
@@ -82,9 +80,13 @@ function validatePort(
  * buildTargetUrl(4056, ['session', 'list'])
  * // => 'http://127.0.0.1:4056/session/list'
  */
-function buildTargetUrl(port: number, path: string[] = []): string {
+function buildTargetUrl(base: string | number, path: string[] = []): string {
 	const pathString = path.length > 0 ? `/${path.join("/")}` : ""
-	return `http://127.0.0.1:${port}${pathString}`
+	const baseString = String(base)
+	if (baseString.startsWith("http")) {
+		return `${baseString}${pathString}`
+	}
+	return `http://127.0.0.1:${baseString}${pathString}`
 }
 
 /**
@@ -100,7 +102,10 @@ async function proxyRequest(
 	port: number,
 	path: string[] = [],
 ): Promise<NextResponse> {
-	const targetUrl = buildTargetUrl(port, path)
+	const manualServer = await getManualServerByProxyPort(port)
+	const targetUrl = manualServer
+		? buildTargetUrl(manualServer.url, path)
+		: buildTargetUrl(port, path)
 
 	try {
 		// Copy headers from incoming request
@@ -112,13 +117,18 @@ async function proxyRequest(
 			headers.set("x-opencode-directory", directoryHeader)
 		}
 
-		// Preserve content-type for POST/PUT/PATCH
 		const contentType = request.headers.get("content-type")
 		if (contentType) {
 			headers.set("content-type", contentType)
 		}
 
-		// Copy body for POST/PUT/PATCH
+		if (manualServer) {
+			const authorization = createAuthorizationHeader(manualServer)
+			if (authorization) {
+				headers.set("authorization", authorization)
+			}
+		}
+
 		let body: ReadableStream | null = null
 		if (["POST", "PUT", "PATCH"].includes(request.method)) {
 			body = request.body
